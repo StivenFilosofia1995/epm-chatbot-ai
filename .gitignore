@@ -1,0 +1,17 @@
+node_modules/
+**/node_modules/
+.env
+**/.env
+*.pdf
+*.log
+dist/
+**/dist/
+.DS_Store
+Thumbs.db
+auth_info/
+
+# Python admin backend
+**/__pycache__/
+*.pyc
+.venv/
+**/.venv/
