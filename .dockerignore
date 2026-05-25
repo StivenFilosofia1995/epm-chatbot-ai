@@ -1,0 +1,13 @@
+node_modules/
+admin/frontend/node_modules/
+admin/frontend/dist/
+admin/backend/__pycache__/
+admin/backend/app/__pycache__/
+admin/backend/app/routers/__pycache__/
+.git/
+*.log
+.env.local
+.venv/
+__pycache__/
+*.pyc
+*.pyo

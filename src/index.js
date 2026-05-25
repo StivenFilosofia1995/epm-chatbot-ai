@@ -6,6 +6,9 @@
 
 import 'dotenv/config';
 import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createProxyMiddleware } from 'http-proxy-middleware';
 import { procesarMensaje } from './agents/chat-agent.js';
 import { ejecutarCicloCompleto, iniciarScheduler, obtenerEstado } from './agents/scheduler-agent.js';
 import { getProgramacionPorFecha, getProgramacion, getProgramacionPorFechas, insertarProgramacion } from './services/supabase.js';
@@ -302,6 +305,38 @@ app.post('/reconcile', requireApiKey, async (req, res) => {
 
 // ─── Rutas WhatsApp (panel de agentes humanos) ───────────────────────────────
 app.use('/wa', waRouter);
+
+// ─── Proxy /api → FastAPI admin backend (127.0.0.1:8001) ────────────────────
+// Solo activo si el proceso FastAPI está corriendo (producción con Dockerfile)
+const ADMIN_API_PORT = process.env.ADMIN_INTERNAL_PORT || '8001';
+app.use('/api', createProxyMiddleware({
+  target: `http://127.0.0.1:${ADMIN_API_PORT}`,
+  changeOrigin: false,
+  on: {
+    error: (_err, _req, res) => {
+      res.status(503).json({ error: 'Panel admin no disponible. Verifica que el backend esté corriendo.' });
+    },
+  },
+}));
+
+// ─── Panel admin: archivos estáticos del build de React ─────────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ADMIN_DIST = path.join(__dirname, '../admin-frontend-dist');
+
+try {
+  const { existsSync } = await import('node:fs');
+  if (existsSync(ADMIN_DIST)) {
+    app.use('/admin', express.static(ADMIN_DIST));
+    // SPA fallback: cualquier ruta /admin/* devuelve index.html
+    app.get('/admin*', (_req, res) => {
+      res.sendFile(path.join(ADMIN_DIST, 'index.html'));
+    });
+    console.log('[Server] Panel admin disponible en /admin');
+  } else {
+    console.log('[Server] admin-frontend-dist no encontrado. Panel admin desactivado.');
+  }
+} catch {}
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
