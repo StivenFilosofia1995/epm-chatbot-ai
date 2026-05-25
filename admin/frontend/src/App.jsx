@@ -68,27 +68,29 @@ export default function App() {
   const loadData = async () => {
     if (!token) return;
     setError('');
-    try {
-      const [l, s, p] = await Promise.all([
-        getLogs(token, 'mensajes'),
-        getSessions(token),
-        getProgramming(token, fechaFiltro),
-      ]);
-      setLogs(l.items || []);
-      setSessions(s.items || []);
-      setProgramming(p.items || []);
 
-      const [statusData, qrData, insightData] = await Promise.all([
-        getOpsStatus(token),
-        getOpsQr(token),
-        getInsights(token),
-      ]);
-      setOpsStatus(statusData.bot || null);
-      setOpsQr(qrData.qr || null);
-      setInsights(insightData || null);
-    } catch (err) {
-      setError(err.message);
-    }
+    // allSettled: cada sección carga independientemente aunque otras fallen
+    const [logsR, sessR, progR, statusR, qrR, insightR] = await Promise.allSettled([
+      getLogs(token, 'mensajes'),
+      getSessions(token),
+      getProgramming(token, fechaFiltro),
+      getOpsStatus(token),
+      getOpsQr(token),
+      getInsights(token),
+    ]);
+
+    if (logsR.status === 'fulfilled') setLogs(logsR.value.items || []);
+    if (sessR.status === 'fulfilled') setSessions(sessR.value.items || []);
+    if (progR.status === 'fulfilled') setProgramming(progR.value.items || []);
+    if (statusR.status === 'fulfilled') setOpsStatus(statusR.value.bot || null);
+    if (qrR.status === 'fulfilled') setOpsQr(qrR.value.qr || null);
+    if (insightR.status === 'fulfilled') setInsights(insightR.value || null);
+
+    // Mostrar los errores que ocurrieron (sin bloquear el resto)
+    const errs = [logsR, sessR, progR, statusR, qrR, insightR]
+      .filter((r) => r.status === 'rejected')
+      .map((r) => r.reason?.message || 'Error desconocido');
+    if (errs.length) setError(errs.join(' | '));
   };
 
   useEffect(() => {
