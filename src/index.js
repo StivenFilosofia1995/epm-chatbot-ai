@@ -8,7 +8,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createProxyMiddleware } from 'http-proxy-middleware';
+// http-proxy-middleware ya no se usa; proxy manual con fetch nativo (Node 20)
 import { procesarMensaje } from './agents/chat-agent.js';
 import { ejecutarCicloCompleto, iniciarScheduler, obtenerEstado } from './agents/scheduler-agent.js';
 import { getProgramacionPorFecha, getProgramacion, getProgramacionPorFechas, insertarProgramacion } from './services/supabase.js';
@@ -307,23 +307,33 @@ app.post('/reconcile', requireApiKey, async (req, res) => {
 app.use('/wa', waRouter);
 
 // ─── Proxy /api → FastAPI admin backend (127.0.0.1:8001) ────────────────────
-// app.use('/api') hace que Express stripee el prefijo antes de pasar al middleware.
-// pathRewrite añade el /api de vuelta para que FastAPI reciba la ruta completa.
 const ADMIN_API_PORT = process.env.ADMIN_INTERNAL_PORT || '8001';
-app.use('/api', createProxyMiddleware({
-  target: `http://127.0.0.1:${ADMIN_API_PORT}`,
-  changeOrigin: true,
-  pathRewrite: { '^/': '/api/' },
-  proxyTimeout: 10000,
-  timeout: 10000,
-  on: {
-    error: (_err, _req, res) => {
-      if (!res.headersSent) {
-        res.status(503).json({ error: 'Panel admin no disponible. Verifica que el backend esté corriendo.' });
-      }
-    },
-  },
-}));
+app.all('/api/*', async (req, res) => {
+  const targetUrl = `http://127.0.0.1:${ADMIN_API_PORT}${req.originalUrl}`;
+  console.log(`[Proxy] ${req.method} ${req.path} → ${targetUrl}`);
+  try {
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (k.toLowerCase() !== 'host') headers[k] = v;
+    }
+    const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+    const fetchRes = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body: hasBody ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(10000),
+    });
+    res.status(fetchRes.status);
+    fetchRes.headers.forEach((v, k) => {
+      if (!['transfer-encoding', 'connection'].includes(k.toLowerCase())) res.setHeader(k, v);
+    });
+    const text = await fetchRes.text();
+    res.send(text);
+  } catch (err) {
+    console.error(`[Proxy] Error: ${err.message}`);
+    if (!res.headersSent) res.status(503).json({ error: 'Panel admin no disponible.' });
+  }
+});
 
 // ─── Panel admin: archivos estáticos del build de React ─────────────────────
 const __filename = fileURLToPath(import.meta.url);
