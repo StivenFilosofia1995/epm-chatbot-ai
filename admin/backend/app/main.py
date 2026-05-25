@@ -31,7 +31,11 @@ app.add_middleware(
 
 @app.get('/health')
 def health():
-    return {'status': 'ok', 'service': 'uva-admin-api'}
+    return {
+        'status': 'ok',
+        'service': 'uva-admin-api',
+        'admin_email_loaded': settings.admin_email,  # debug temporal
+    }
 
 
 app.include_router(auth_router, prefix='/api')
