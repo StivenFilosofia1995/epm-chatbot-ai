@@ -307,16 +307,20 @@ app.post('/reconcile', requireApiKey, async (req, res) => {
 app.use('/wa', waRouter);
 
 // ─── Proxy /api → FastAPI admin backend (127.0.0.1:8001) ────────────────────
-// Usando pathFilter (no app.use('/api')) para que el prefijo /api NO se stripee
-// y FastAPI reciba la ruta completa /api/auth/login etc.
+// app.use('/api') hace que Express stripee el prefijo antes de pasar al middleware.
+// pathRewrite añade el /api de vuelta para que FastAPI reciba la ruta completa.
 const ADMIN_API_PORT = process.env.ADMIN_INTERNAL_PORT || '8001';
-app.use(createProxyMiddleware({
+app.use('/api', createProxyMiddleware({
   target: `http://127.0.0.1:${ADMIN_API_PORT}`,
-  pathFilter: '/api',
-  changeOrigin: false,
+  changeOrigin: true,
+  pathRewrite: { '^/': '/api/' },
+  proxyTimeout: 10000,
+  timeout: 10000,
   on: {
     error: (_err, _req, res) => {
-      res.status(503).json({ error: 'Panel admin no disponible. Verifica que el backend esté corriendo.' });
+      if (!res.headersSent) {
+        res.status(503).json({ error: 'Panel admin no disponible. Verifica que el backend esté corriendo.' });
+      }
     },
   },
 }));
