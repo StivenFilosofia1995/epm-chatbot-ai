@@ -106,7 +106,7 @@ app.get('/', (req, res) => {
       wa_status: 'GET /wa/status',
       wa_qr: 'GET /wa/qr',
     },
-    nota: 'El panel admin se despliega como servicios separados (admin/backend y admin/frontend).',
+    admin: '/admin',
   });
 });
 
