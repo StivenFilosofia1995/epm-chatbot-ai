@@ -307,10 +307,12 @@ app.post('/reconcile', requireApiKey, async (req, res) => {
 app.use('/wa', waRouter);
 
 // ─── Proxy /api → FastAPI admin backend (127.0.0.1:8001) ────────────────────
-// Solo activo si el proceso FastAPI está corriendo (producción con Dockerfile)
+// Usando pathFilter (no app.use('/api')) para que el prefijo /api NO se stripee
+// y FastAPI reciba la ruta completa /api/auth/login etc.
 const ADMIN_API_PORT = process.env.ADMIN_INTERNAL_PORT || '8001';
-app.use('/api', createProxyMiddleware({
+app.use(createProxyMiddleware({
   target: `http://127.0.0.1:${ADMIN_API_PORT}`,
+  pathFilter: '/api',
   changeOrigin: false,
   on: {
     error: (_err, _req, res) => {
