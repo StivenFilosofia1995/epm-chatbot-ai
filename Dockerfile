@@ -36,8 +36,8 @@ COPY . .
 # ── Build del frontend ya compilado ─────────────────────────────────────────
 COPY --from=frontend-build /build/dist ./admin-frontend-dist
 
-# Permisos del script de arranque
-RUN chmod +x start.sh
+# Permisos del script de arranque (strip CRLF en caso de checkout Windows)
+RUN sed -i 's/\r//' start.sh && chmod +x start.sh
 
 EXPOSE 3000
 
