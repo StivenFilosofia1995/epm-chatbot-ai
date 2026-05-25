@@ -12,17 +12,12 @@ import {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { procesarMensajeWhatsApp } from './message-handler.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AUTH_FOLDER = path.join(__dirname, '../../auth_info');
+import { useSupabaseAuthState, deleteSession } from './session-store.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -64,7 +59,7 @@ export function getLastQRInfo() {
 export async function iniciarWhatsApp() {
   console.log('[WA] 🔌 Iniciando conexión a WhatsApp...');
 
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+  const { state, saveCreds } = await useSupabaseAuthState();
   const { version } = await fetchLatestBaileysVersion();
   console.log(`[WA] Usando Baileys v${version.join('.')}`);
 
@@ -134,13 +129,11 @@ export async function iniciarWhatsApp() {
         return;
       }
 
-      // Sesión rechazada por WhatsApp → borrar archivos de sesión y pedir QR nuevo
+      // Sesión rechazada por WhatsApp → borrar sesión en Supabase y pedir QR nuevo
       if (statusCode === DisconnectReason.loggedOut) {
         console.log('[WA] ⚠ Sesión cerrada. Generando nuevo QR...');
         intentosReconexion = 0;
-        // Borrar archivos de auth para forzar nuevo QR
-        const { rmSync } = await import('node:fs');
-        try { rmSync(AUTH_FOLDER, { recursive: true, force: true }); } catch {}
+        await deleteSession();
         setTimeout(iniciarWhatsApp, 2000);
         return;
       }

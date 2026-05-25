@@ -108,3 +108,12 @@ export async function getInsights(token) {
   if (!res.ok) throw new Error('No se pudieron cargar insights');
   return res.json();
 }
+
+export async function disconnectWhatsApp(token) {
+  const res = await fetch(`${API_BASE}/ops/disconnect`, {
+    method: 'POST',
+    headers: headers(token),
+  });
+  if (!res.ok) throw new Error('No se pudo desconectar WhatsApp');
+  return res.json();
+}

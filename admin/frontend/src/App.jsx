@@ -14,6 +14,7 @@ import {
   getOpsStatus,
   getOpsQr,
   getInsights,
+  disconnectWhatsApp,
 } from './lib/api.js';
 
 const TABS = ['insights', 'logs', 'sesiones', 'programacion'];
@@ -31,6 +32,7 @@ export default function App() {
   const [opsQr, setOpsQr] = useState(null);
   const [opsQrImage, setOpsQrImage] = useState('');
   const [insights, setInsights] = useState(null);
+  const [reiniciando, setReiniciando] = useState(false);
 
   const [fechaFiltro, setFechaFiltro] = useState('');
   const [pdfFile, setPdfFile] = useState(null);
@@ -93,6 +95,20 @@ export default function App() {
     loadData();
   }, [token, fechaFiltro]);
 
+  // Auto-refresh cada 12 s mientras esperamos QR (no conectado y sin sesión activa)
+  useEffect(() => {
+    if (!token) return;
+    const noConectado = !opsStatus?.conectado;
+    if (!noConectado) return;
+    const interval = setInterval(() => {
+      Promise.all([getOpsStatus(token), getOpsQr(token)]).then(([s, q]) => {
+        setOpsStatus(s.bot || null);
+        setOpsQr(q.qr || null);
+      }).catch(() => {});
+    }, 12000);
+    return () => clearInterval(interval);
+  }, [token, opsStatus?.conectado]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -125,6 +141,23 @@ export default function App() {
   }, [opsQr]);
 
   const logRows = useMemo(() => logs.slice(0, 100), [logs]);
+
+  const handleDisconnectWhatsApp = async () => {
+    if (!window.confirm('¿Desconectar WhatsApp y generar nuevo QR?')) return;
+    setReiniciando(true);
+    setError('');
+    try {
+      await disconnectWhatsApp(token);
+      // Esperar 3s y refrescar para mostrar el nuevo QR
+      setTimeout(async () => {
+        await loadData();
+        setReiniciando(false);
+      }, 3000);
+    } catch (err) {
+      setError(err.message);
+      setReiniciando(false);
+    }
+  };
 
   const saveProgram = async () => {
     try {
@@ -232,30 +265,52 @@ export default function App() {
           </div>
 
           <aside className="editor">
-            <h3>Inicio de sesión WhatsApp (QR)</h3>
-            {opsStatus?.conectado && <p className="ok">Sesión activa: {opsStatus?.numero || 'N/D'}</p>}
-            {!opsStatus?.conectado && opsQr?.qr && (
+            <h3>Conexión WhatsApp</h3>
+
+            {reiniciando && <p className="muted">⏳ Reiniciando sesión, espera...</p>}
+
+            {!reiniciando && opsStatus?.conectado && (
               <>
-                <p className="muted">Escanee este código en WhatsApp Business.</p>
+                <p className="ok">✅ Sesión activa: {opsStatus?.numero || 'N/D'}</p>
+                <button className="danger" onClick={handleDisconnectWhatsApp}>
+                  Desconectar y generar nuevo QR
+                </button>
+              </>
+            )}
+
+            {!reiniciando && !opsStatus?.conectado && opsQr?.qr && (
+              <>
+                <p className="muted">📱 Escanea con WhatsApp Business → Dispositivos vinculados → Vincular dispositivo</p>
                 {opsQrImage ? (
                   <img
                     className="qr-image"
                     src={opsQrImage}
                     alt="QR de inicio de sesion WhatsApp"
-                    width={320}
-                    height={320}
+                    width={300}
+                    height={300}
+                    style={{ display: 'block', margin: '12px 0', borderRadius: 8 }}
                   />
                 ) : (
                   <p className="muted">Generando imagen QR...</p>
                 )}
-                <p className="muted small">Generado: {opsQr?.generado_en || 'N/D'}</p>
+                <p className="muted small">Generado: {opsQr?.generado_en || 'N/D'} — actualiza cada 12 s</p>
+                <button onClick={loadData} style={{ marginTop: 8 }}>🔄 Refrescar QR ahora</button>
               </>
             )}
-            {!opsStatus?.conectado && opsQr?.error && (
-              <p className="error">No se pudo consultar el QR del bot: {opsQr.error}</p>
-            )}
-            {!opsStatus?.conectado && !opsQr?.qr && (
-              <p className="muted">Aún no hay QR disponible. Presione "Actualizar".</p>
+
+            {!reiniciando && !opsStatus?.conectado && !opsQr?.qr && (
+              <>
+                <p className="muted">No hay QR activo.</p>
+                <button onClick={handleDisconnectWhatsApp}>
+                  Generar nuevo QR
+                </button>
+                <button onClick={loadData} style={{ marginTop: 8 }}>🔄 Refrescar</button>
+                {opsQr?.error && (
+                  <p className="error" style={{ marginTop: 8 }}>
+                    Error al consultar bot: {opsQr.error}
+                  </p>
+                )}
+              </>
             )}
           </aside>
         </section>

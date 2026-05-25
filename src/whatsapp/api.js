@@ -11,7 +11,8 @@
  */
 
 import express from 'express';
-import { getSock, getLastQRInfo } from './whatsapp.js';
+import { getSock, getLastQRInfo, iniciarWhatsApp } from './whatsapp.js';
+import { deleteSession } from './session-store.js';
 import { supabase } from '../services/supabase.js';
 import {
   tomarControlHumano,
@@ -144,4 +145,15 @@ waRouter.get('/qr', auth, async (req, res) => {
     generado_en: qrInfo.generado_en,
     esperando_qr: qrInfo.esperando_qr,
   });
+});
+// ─── POST /wa/reiniciar ─── eliminar sesión y forzar nuevo QR ─────────────────────
+waRouter.post('/reiniciar', auth, async (req, res) => {
+  try {
+    await deleteSession();
+    // Reiniciar la conexión de WhatsApp (generará nuevo QR)
+    setTimeout(iniciarWhatsApp, 1000);
+    res.json({ ok: true, mensaje: 'Sesión eliminada. Generando nuevo QR en 1 segundo...' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });

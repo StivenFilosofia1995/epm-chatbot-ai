@@ -28,6 +28,24 @@ def _fetch_bot_json(path: str):
         return {'ok': False, 'error': str(exc)}
 
 
+def _post_bot(path: str):
+    if not settings.bot_admin_api_key:
+        return {'ok': False, 'error': 'BOT_ADMIN_API_KEY no configurada'}
+
+    url = f"{settings.bot_api_base_url.rstrip('/')}/{path.lstrip('/')}"
+    req = Request(
+        url,
+        data=b'{}',
+        headers={'x-api-key': settings.bot_admin_api_key, 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urlopen(req, timeout=12) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except Exception as exc:
+        return {'ok': False, 'error': str(exc)}
+
+
 def _count_rows(table: str, filters=None) -> int:
     q = supabase.table(table).select('*', count='exact', head=True)
     if filters:
@@ -48,6 +66,12 @@ def ops_status(_admin: Annotated[str, Depends(get_current_admin)]):
 def ops_qr(_admin: Annotated[str, Depends(get_current_admin)]):
     qr = _fetch_bot_json('qr')
     return {'qr': qr}
+
+
+@router.post('/disconnect')
+def ops_disconnect(_admin: Annotated[str, Depends(get_current_admin)]):
+    result = _post_bot('reiniciar')
+    return result
 
 
 @router.get('/insights')
