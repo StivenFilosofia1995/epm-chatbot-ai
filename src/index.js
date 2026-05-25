@@ -86,6 +86,28 @@ function validarMensajeChat(req, res, next) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
+ * GET /
+ * Landing operativo para evitar 404 en la raiz del servicio.
+ */
+app.get('/', (req, res) => {
+  res.json({
+    servicio: 'uva-bot-api',
+    estado: 'ok',
+    mensaje: 'Servicio desplegado correctamente en Railway.',
+    health: '/health',
+    endpoints: {
+      chat: 'POST /chat',
+      programacion: 'GET /programacion',
+      scrape: 'POST /scrape',
+      reconcile: 'POST /reconcile',
+      wa_status: 'GET /wa/status',
+      wa_qr: 'GET /wa/qr',
+    },
+    nota: 'El panel admin se despliega como servicios separados (admin/backend y admin/frontend).',
+  });
+});
+
+/**
  * GET /health
  * Health check para Railway y monitoreo externo.
  */
@@ -286,9 +308,9 @@ app.use((req, res) => {
   res.status(404).json({
     error: 'Endpoint no encontrado.',
     endpoints: [
-      'POST /chat', 'GET /programacion', 'POST /scrape', 'POST /reconcile', 'GET /health',
+      'GET /', 'POST /chat', 'GET /programacion', 'POST /scrape', 'POST /reconcile', 'GET /health',
       'GET /wa/chats', 'GET /wa/chats/humano', 'GET /wa/mensajes/:jid',
-      'POST /wa/tomar', 'POST /wa/devolver', 'POST /wa/enviar', 'GET /wa/status',
+      'POST /wa/tomar', 'POST /wa/devolver', 'POST /wa/enviar', 'GET /wa/status', 'GET /wa/qr',
     ],
   });
 });

@@ -149,6 +149,30 @@ curl http://localhost:3000/health
 4. En **Variables**, añade todas las del `.env.example`
 5. Railway detecta automáticamente `railway.json` y el `package.json`
 
+Este despliegue corresponde al servicio del bot/API Node.
+Si abres la URL raiz veras JSON de estado/endpoints del bot.
+
+### Admin en el mismo repositorio (monorepo)
+
+Para publicar el panel admin crea dos servicios adicionales:
+
+1. Servicio `uva-admin-api`
+   - Root Directory: `admin/backend`
+   - Usa `admin/backend/railway.json`
+   - Healthcheck: `/health`
+2. Servicio `uva-admin-ui`
+   - Root Directory: `admin/frontend`
+   - Usa `admin/frontend/railway.json`
+   - Start: `npm run start`
+
+Variables minimas de enlace entre servicios:
+- En `uva-admin-api`:
+  - `FRONTEND_ORIGIN` = URL publica de `uva-admin-ui`
+  - `BOT_API_BASE_URL` = URL publica del bot + `/wa`
+  - `BOT_ADMIN_API_KEY` = mismo `ADMIN_API_KEY` del bot
+- En `uva-admin-ui`:
+  - `VITE_API_BASE` = URL publica de `uva-admin-api` + `/api`
+
 ### Opción B: Railway CLI
 
 ```bash
