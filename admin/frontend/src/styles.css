@@ -153,6 +153,20 @@ h1, h2, h3 {
   line-height: 1.1;
 }
 
+.qr-image {
+  display: block;
+  width: min(100%, 320px);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+}
+
+.small {
+  font-size: 12px;
+}
+
 .editor {
   border-left: 1px dashed var(--line);
   padding-left: 16px;

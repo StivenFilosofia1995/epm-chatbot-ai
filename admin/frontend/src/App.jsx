@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import QRCode from 'qrcode';
 import LoginPanel from './components/LoginPanel.jsx';
 import {
   login,
@@ -28,6 +29,7 @@ export default function App() {
   const [programming, setProgramming] = useState([]);
   const [opsStatus, setOpsStatus] = useState(null);
   const [opsQr, setOpsQr] = useState(null);
+  const [opsQrImage, setOpsQrImage] = useState('');
   const [insights, setInsights] = useState(null);
 
   const [fechaFiltro, setFechaFiltro] = useState('');
@@ -90,6 +92,37 @@ export default function App() {
   useEffect(() => {
     loadData();
   }, [token, fechaFiltro]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const buildQrImage = async () => {
+      if (!opsQr?.qr || typeof opsQr.qr !== 'string') {
+        setOpsQrImage('');
+        return;
+      }
+
+      try {
+        const dataUrl = await QRCode.toDataURL(opsQr.qr, {
+          width: 320,
+          margin: 2,
+          color: {
+            dark: '#0b0f13',
+            light: '#ffffff',
+          },
+        });
+        if (!cancelled) setOpsQrImage(dataUrl);
+      } catch {
+        if (!cancelled) setOpsQrImage('');
+      }
+    };
+
+    buildQrImage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [opsQr]);
 
   const logRows = useMemo(() => logs.slice(0, 100), [logs]);
 
@@ -204,8 +237,22 @@ export default function App() {
             {!opsStatus?.conectado && opsQr?.qr && (
               <>
                 <p className="muted">Escanee este código en WhatsApp Business.</p>
-                <pre className="qr-box">{opsQr.qr}</pre>
+                {opsQrImage ? (
+                  <img
+                    className="qr-image"
+                    src={opsQrImage}
+                    alt="QR de inicio de sesion WhatsApp"
+                    width={320}
+                    height={320}
+                  />
+                ) : (
+                  <p className="muted">Generando imagen QR...</p>
+                )}
+                <p className="muted small">Generado: {opsQr?.generado_en || 'N/D'}</p>
               </>
+            )}
+            {!opsStatus?.conectado && opsQr?.error && (
+              <p className="error">No se pudo consultar el QR del bot: {opsQr.error}</p>
             )}
             {!opsStatus?.conectado && !opsQr?.qr && (
               <p className="muted">Aún no hay QR disponible. Presione "Actualizar".</p>
