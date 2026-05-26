@@ -873,26 +873,40 @@ async function _respuestaTematica(mensaje, session) {
     return `Lo siento${nombre}, no encontré actividades relacionadas con *"${tema}"* en la programación actual de las UVAs.\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
   }
 
-  // Agrupar por UVA y tomar la próxima ocurrencia de cada una
+  // Agrupar por UVA → por actividad, colectando todas las fechas
+  const _fechaCorta = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    const dSem = ['dom','lun','mar','mié','jue','vie','sáb'][dt.getDay()];
+    const mNom = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][m - 1];
+    return `${dSem} ${d} ${mNom}`;
+  };
+
   const porUVA = new Map();
   for (const act of resultados) {
-    if (!porUVA.has(act.uva_nombre)) {
-      porUVA.set(act.uva_nombre, act);
-    }
+    if (!porUVA.has(act.uva_nombre)) porUVA.set(act.uva_nombre, new Map());
+    const key = `${act.actividad}|||${act.hora_inicio}|||${act.hora_fin}`;
+    const actMap = porUVA.get(act.uva_nombre);
+    if (!actMap.has(key)) actMap.set(key, { ...act, fechas: [] });
+    actMap.get(key).fechas.push(act.fecha);
   }
 
   const nombre = session?.nombre ? `¡Claro, ${session.nombre}! ` : '¡Claro! ';
-  let respuesta = `${nombre}Encontré actividades relacionadas con *"${tema}"* en estas UVAs 🌟\n\n`;
+  let respuesta = `${nombre}Encontré actividades relacionadas con *"${tema}"* 🌟\n\n`;
 
-  for (const [uva, act] of porUVA) {
-    const hi = (act.hora_inicio || '?').slice(0, 5);
-    const hf = (act.hora_fin   || '?').slice(0, 5);
-    const fechaFmt = formatearFechaEspanol(act.fecha);
-    const em = _emoji(act.actividad);
-    respuesta += `${em} *${uva}*\n   └ ${act.actividad} · ${fechaFmt} ${hi}–${hf}\n`;
+  for (const [uva, actMap] of porUVA) {
+    const em = _emoji(uva);
+    respuesta += `${em} *${uva}*\n`;
+    for (const act of actMap.values()) {
+      const hi = (act.hora_inicio || '?').slice(0, 5);
+      const hf = (act.hora_fin   || '?').slice(0, 5);
+      const fechasFmt = act.fechas.map(_fechaCorta).join(', ');
+      respuesta += `   └ ${act.actividad}\n      📅 ${fechasFmt} · ${hi}–${hf}\n`;
+    }
+    respuesta += '\n';
   }
 
-  respuesta += `\n¿Le gustaría más info de alguna UVA en particular? 😊`;
+  respuesta += `¿Le gustaría más info de alguna UVA en particular? 😊`;
   return respuesta;
 }
 
