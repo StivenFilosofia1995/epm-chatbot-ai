@@ -844,17 +844,26 @@ async function _respuestaTematica(mensaje, session) {
   }
 
   // Generar keywords: el tema completo + palabras individuales de ≥4 letras
-  const palabras = tema.split(/\s+/).filter((p) => p.length >= 4);
-  const keywords = [...new Set([tema, ...palabras])];
+  // + raíces cortas para cubrir variantes (ej: "robótica" → "robot")
+  const palabras = tema
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // quitar tildes
+    .split(/\s+/).filter((p) => p.length >= 4);
 
-  // Buscar en el mes actual (+-30 días)
+  const raices = palabras.map((p) => p.slice(0, Math.max(4, p.length - 2)));
+  const keywords = [...new Set([
+    tema,
+    tema.normalize('NFD').replace(/[\u0300-\u036f]/g, ''),  // sin tildes
+    ...palabras,
+    ...raices,
+  ])];
+
+  // Buscar solo desde hoy en adelante (no mostrar eventos pasados)
   const hoy = hoyISO();
-  const inicio = hoy.slice(0, 7) + '-01'; // primer día del mes
-  const fin = sumarDias(hoy, 60);          // hasta 60 días adelante
+  const fin = sumarDias(hoy, 60);  // hasta 60 días adelante
 
   let resultados = [];
   try {
-    resultados = await buscarActividadesPorTema(keywords, inicio, fin, [...RECINTOS_EPM]);
+    resultados = await buscarActividadesPorTema(keywords, hoy, fin, [...RECINTOS_EPM]);
   } catch (err) {
     log(`Error búsqueda temática: ${err.message}`);
   }
