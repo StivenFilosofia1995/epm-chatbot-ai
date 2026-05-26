@@ -47,6 +47,8 @@ Horarios de actividades por UVA (primera y última actividad del día — Mayo 2
 - UVA de La Cordialidad    → 10:30 a.m. – 4:00 p.m.
 - UVA de La Alegría        → 10:00 a.m. – 5:00 p.m.
 - Biblioteca EPM           → 10:00 a.m. – 5:00 p.m.
+- Museo del Agua EPM       → Mar–Vie: 8:30 a.m.–3:30 p.m. | Sáb, Dom y festivos: 9:30 a.m.–4:00 p.m. | Lunes: CERRADO
+  📍 Carrera 57 #42-139, Parque de los Pies Descalzos, Medellín
 
 Cuando el usuario pregunte por horarios de atención o a qué hora abre/cierra una UVA, usa los datos anteriores para la UVA específica y añade: "Recuerde que los horarios pueden variar según el día y la programación del mes. Para confirmar, puede llamar al 📞 (604) 448 69 60 o escribir a contactenos@fundacionepm.org.co"
 
@@ -79,6 +81,8 @@ Mapa de UVAs y barrios (para responder preguntas de ubicación — NO inventes a
 - UVA Mirador de San Cristóbal → San Javier, Las Independencias, El Pesebre
 - UVA Aguas Claras → Bello, Niquía, Acevedo
 - UVA San Fernando → Itagüí, Guayabal, Belén Sur
+- Museo del Agua EPM → Centro de Medellín, Parque de los Pies Descalzos (Carrera 57 #42-139)
+- Biblioteca EPM → Centro de Medellín (junto al Parque de los Pies Descalzos)
 
 *Boston NO es una UVA*. Es un barrio dentro de la UVA de La Imaginación. Si el usuario pide info de un barrio que no es el suyo, usa el contexto de esa UVA que se te provee.
 
