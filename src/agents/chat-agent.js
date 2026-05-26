@@ -45,6 +45,13 @@ export const UVA_NOMBRES = Object.freeze([
   'UVA San Fernando',
 ]);
 
+/** Todos los recintos EPM con programación (UVAs + espacios complementarios) */
+export const RECINTOS_EPM = Object.freeze([
+  ...UVA_NOMBRES,
+  'Biblioteca EPM',
+  'Museo del Agua',
+]);
+
 const MUNICIPIOS_SIN_COBERTURA = Object.freeze([
   'envigado',
   'sabaneta',
@@ -826,7 +833,7 @@ async function _respuestaTematica(mensaje, session) {
 
   let resultados = [];
   try {
-    resultados = await buscarActividadesPorTema(keywords, inicio, fin);
+    resultados = await buscarActividadesPorTema(keywords, inicio, fin, [...RECINTOS_EPM]);
   } catch (err) {
     log(`Error búsqueda temática: ${err.message}`);
   }

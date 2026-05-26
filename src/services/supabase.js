@@ -130,19 +130,27 @@ export async function getProgramacionPorFechas(fechas = []) {
 /**
  * Búsqueda temática: busca actividades por palabras clave en TODAS las UVAs.
  * Útil para preguntas como "¿en qué UVA hay agroecología?" o "dónde hay danza?"
- * @param {string[]} keywords  — palabras clave (lowercase)
+ * @param {string[]} keywords   — palabras clave (lowercase)
  * @param {string}   fechaDesde — YYYY-MM-DD
  * @param {string}   fechaHasta — YYYY-MM-DD
+ * @param {string[]} [recintos] — lista de uva_nombre válidos (opcional, filtra la DB)
  * @returns {Promise<Array>}
  */
-export async function buscarActividadesPorTema(keywords = [], fechaDesde, fechaHasta) {
-  if (!keywords.length) return [];
+export async function buscarActividadesPorTema(keywords, fechaDesde, fechaHasta, recintos = null) {
+  if (!keywords?.length) return [];
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('programacion_uva')
     .select('uva_nombre,fecha,hora_inicio,hora_fin,actividad,descripcion,edad_recomendada')
     .gte('fecha', fechaDesde)
-    .lte('fecha', fechaHasta)
+    .lte('fecha', fechaHasta);
+
+  // Filtrar solo recintos EPM oficiales cuando se proporciona la lista
+  if (Array.isArray(recintos) && recintos.length) {
+    query = query.in('uva_nombre', recintos);
+  }
+
+  const { data, error } = await query
     .order('uva_nombre', { ascending: true })
     .order('fecha',      { ascending: true })
     .order('hora_inicio', { ascending: true });
