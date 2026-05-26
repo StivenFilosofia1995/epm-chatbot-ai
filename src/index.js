@@ -8,14 +8,15 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// http-proxy-middleware ya no se usa; proxy manual con fetch nativo (Node 20)
+import { createHmac } from 'node:crypto';
 import { procesarMensaje } from './agents/chat-agent.js';
 import { ejecutarCicloCompleto, iniciarScheduler, obtenerEstado } from './agents/scheduler-agent.js';
 import { getProgramacionPorFecha, getProgramacion, getProgramacionPorFechas, insertarProgramacion } from './services/supabase.js';
 import { ejecutarScraper } from './agents/scraper-agent.js';
 import { extraerActividadesPlano } from './agents/parser-agent.js';
 import { hoyISO, sumarDias } from './utils/date-helper.js';
-import { iniciarWhatsApp } from './whatsapp/whatsapp.js';
+import { iniciarWhatsApp, getSock, getLastQRInfo } from './whatsapp/whatsapp.js';
+import { deleteSession } from './whatsapp/session-store.js';
 import { waRouter } from './whatsapp/api.js';
 
 const app = express();
@@ -300,6 +301,54 @@ app.post('/reconcile', requireApiKey, async (req, res) => {
   } catch (err) {
     console.error('[Server] Error en /reconcile:', err.message);
     return res.status(500).json({ ok: false, error: `Reconciliación falló: ${err.message}` });
+  }
+});
+
+// ─── JWT helper (verifica tokens del panel admin sin depender de FastAPI) ────
+function verifyAdminJWT(authHeader) {
+  if (!authHeader?.startsWith('Bearer ')) return false;
+  const token = authHeader.slice(7);
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return false;
+  try {
+    const [h, p, sig] = token.split('.');
+    if (!h || !p || !sig) return false;
+    const expected = createHmac('sha256', secret)
+      .update(`${h}.${p}`)
+      .digest('base64')
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    if (expected !== sig) return false;
+    const payload = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return false;
+    return true;
+  } catch { return false; }
+}
+
+// ─── Rutas directas WA (usan JWT del panel, no pasan por FastAPI) ─────────────
+// GET /api/wa/status
+app.get('/api/wa/status', (req, res) => {
+  if (!verifyAdminJWT(req.headers.authorization)) return res.status(401).json({ error: 'No autorizado' });
+  const sock = getSock();
+  res.json({ bot: { conectado: !!sock?.user, numero: sock?.user?.id?.split(':')[0] || null, timestamp: new Date().toISOString() } });
+});
+
+// GET /api/wa/qr
+app.get('/api/wa/qr', (req, res) => {
+  if (!verifyAdminJWT(req.headers.authorization)) return res.status(401).json({ error: 'No autorizado' });
+  const sock = getSock();
+  const info = getLastQRInfo();
+  res.json({ qr: { conectado: !!sock?.user, qr: info.qr, generado_en: info.generado_en, esperando_qr: info.esperando_qr } });
+});
+
+// POST /api/wa/reiniciar
+app.post('/api/wa/reiniciar', async (req, res) => {
+  if (!verifyAdminJWT(req.headers.authorization)) return res.status(401).json({ error: 'No autorizado' });
+  try {
+    await deleteSession();
+    setTimeout(iniciarWhatsApp, 1000);
+    res.json({ ok: true, mensaje: 'Sesión eliminada. Generando nuevo QR en 1 segundo...' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

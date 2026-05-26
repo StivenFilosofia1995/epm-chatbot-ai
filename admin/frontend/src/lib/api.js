@@ -92,13 +92,13 @@ export async function ingestProgrammingPdf(token, file, replaceMonth = false, oc
 }
 
 export async function getOpsStatus(token) {
-  const res = await fetch(`${API_BASE}/ops/status`, { headers: headers(token) });
+  const res = await fetch(`/api/wa/status`, { headers: headers(token) });
   if (!res.ok) throw new Error('No se pudo cargar estado operativo');
   return res.json();
 }
 
 export async function getOpsQr(token) {
-  const res = await fetch(`${API_BASE}/ops/qr`, { headers: headers(token) });
+  const res = await fetch(`/api/wa/qr`, { headers: headers(token) });
   if (!res.ok) throw new Error('No se pudo cargar QR');
   return res.json();
 }
@@ -110,7 +110,7 @@ export async function getInsights(token) {
 }
 
 export async function disconnectWhatsApp(token) {
-  const res = await fetch(`${API_BASE}/ops/disconnect`, {
+  const res = await fetch(`/api/wa/reiniciar`, {
     method: 'POST',
     headers: headers(token),
   });
