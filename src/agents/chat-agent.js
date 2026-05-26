@@ -690,22 +690,22 @@ function _dispararScrapingBackground(uvaNombre) {
 
 function _actividadesAMD(uvaNombre, fecha, actividades) {
   const fechaFmt = formatearFechaEspanol(fecha);
-  let md = `## 🍇 ${uvaNombre}\n### 📅 ${fechaFmt}\n`;
+  let md = `🍇 *${uvaNombre}*\n📅 ${fechaFmt}\n`;
   for (const act of actividades) {
     const hi = (act.hora_inicio || '?').slice(0, 5);
     const hf = (act.hora_fin   || '?').slice(0, 5);
     const em = _emoji(act.actividad);
-    md += `- ${em} \`${hi}–${hf}\` **${act.actividad}**`;
+    md += `${em} ${hi}–${hf} — *${act.actividad}*`;
     if (act.descripcion)      md += ` — ${act.descripcion}`;
-    if (act.edad_recomendada) md += ` _(👥 ${act.edad_recomendada})_`;
+    if (act.edad_recomendada) md += ` (👥 ${act.edad_recomendada})`;
     md += '\n';
   }
-  md += '\n> 📞 Inscripciones: consulte directamente en la UVA.';
+  md += '\n[FIN_ACTIVIDADES]';
   return md;
 }
 
 function _actividadesAMDSemana(uvaNombre, fechas, actividades) {
-  let md = `## 🍇 ${uvaNombre}\n### 📅 Semana del ${formatearFechaEspanol(fechas[0])} al ${formatearFechaEspanol(fechas[6])}\n`;
+  let md = `🍇 *${uvaNombre}*\n📅 Semana del ${formatearFechaEspanol(fechas[0])} al ${formatearFechaEspanol(fechas[6])}\n`;
 
   const grupos = new Map();
   for (const fecha of fechas) {
@@ -718,9 +718,9 @@ function _actividadesAMDSemana(uvaNombre, fechas, actividades) {
 
   for (const fecha of fechas) {
     const lista = grupos.get(fecha) || [];
-    md += `\n### ${nombreDia(fecha)} ${fecha}\n`;
+    md += `\n📆 *${nombreDia(fecha)}*\n`;
     if (lista.length === 0) {
-      md += `- Sin programación cargada\n`;
+      md += `Sin programación cargada\n`;
       continue;
     }
 
@@ -728,14 +728,14 @@ function _actividadesAMDSemana(uvaNombre, fechas, actividades) {
       const hi = (act.hora_inicio || '?').slice(0, 5);
       const hf = (act.hora_fin || '?').slice(0, 5);
       const em = _emoji(act.actividad);
-      md += `- ${em} \`${hi}–${hf}\` **${act.actividad}**`;
+      md += `${em} ${hi}–${hf} — *${act.actividad}*`;
       if (act.descripcion) md += ` — ${act.descripcion}`;
-      if (act.edad_recomendada) md += ` _(👥 ${act.edad_recomendada})_`;
+      if (act.edad_recomendada) md += ` (👥 ${act.edad_recomendada})`;
       md += '\n';
     }
   }
 
-  md += '\n> 📞 Inscripciones: consulte directamente en la UVA.';
+  md += '\n[FIN_ACTIVIDADES]';
   return md;
 }
 
