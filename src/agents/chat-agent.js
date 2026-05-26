@@ -16,6 +16,7 @@ import {
   getProgramacion,
   getProgramacionPorFecha,
   getProgramacionPorFechas,
+  buscarActividadesPorTema,
   guardarMensaje,
   getHistorialSesion,
   limpiarHistorialSesion,
@@ -279,7 +280,13 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
     return { respuesta, uva: session.uva, barrio: session.barrio, fecha: hoyISO() };
   }
-
+  // ── 4b. BÚSqueda temática: "¿en qué UVA hay X?" — cruza todas las UVAs ──────
+  if (_esBusquedaTematica(mensaje)) {
+    const respuesta = await _respuestaTematica(mensaje, session);
+    _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio || null, null);
+    _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
+    return { respuesta, uva: null, barrio: session.barrio || null, fecha: hoyISO() };
+  }
   // ── 4. ESTADO ACTIVO: tenemos UVA → flujo completo ───────────────────────
   const alcanceTemporal = parsearAlcanceTemporal(mensaje);
   const fechaSolicitada = alcanceTemporal.fechaInicio;
@@ -780,6 +787,76 @@ function _mensajeSaludo(nombre) {
 function _fallback(uva, md) {
   if (md?.includes('**')) return `Acá la programación:\n\n${md}`;
   return _sinDatos(uva);
+}
+
+// ─── Búsqueda temática: "¿en qué UVA hay X?" ────────────────────────────────
+
+const PATRON_BUSQUEDA_TEMATICA = /(?:en\s+(?:cu[aá]l(?:es)?|qu[eé])\s+uva|qu[eé]\s+uvas?\s+(?:tiene[n]?|ofrece[n]?|hay|tienen)\s+|d[oó]nde\s+hay\s+|en\s+qu[eé]\s+lugar(?:es)?\s+hay\s+|cu[aá]les?\s+uvas?\s+(?:tienen?|hacen?|ofrecen?)\s+)/i;
+
+/**
+ * Detecta si el mensaje es una búsqueda transversal de tema en todas las UVAs.
+ */
+function _esBusquedaTematica(texto = '') {
+  return PATRON_BUSQUEDA_TEMATICA.test(texto);
+}
+
+/**
+ * Responde a búsquedas temáticas buscando en todas las UVAs del mes actual.
+ */
+async function _respuestaTematica(mensaje, session) {
+  // Extraer el tema del mensaje (lo que viene después del patrón)
+  const tema = mensaje
+    .replace(PATRON_BUSQUEDA_TEMATICA, '')
+    .replace(/[?¿!¡.,]/g, '')
+    .trim()
+    .toLowerCase();
+
+  if (!tema || tema.length < 3) {
+    return '¿Sobre qué tipo de actividad quiere buscar? Cuénteme y busco en todas las UVAs 😊';
+  }
+
+  // Generar keywords: el tema completo + palabras individuales de ≥4 letras
+  const palabras = tema.split(/\s+/).filter((p) => p.length >= 4);
+  const keywords = [...new Set([tema, ...palabras])];
+
+  // Buscar en el mes actual (+-30 días)
+  const hoy = hoyISO();
+  const inicio = hoy.slice(0, 7) + '-01'; // primer día del mes
+  const fin = sumarDias(hoy, 60);          // hasta 60 días adelante
+
+  let resultados = [];
+  try {
+    resultados = await buscarActividadesPorTema(keywords, inicio, fin);
+  } catch (err) {
+    log(`Error búsqueda temática: ${err.message}`);
+  }
+
+  if (!resultados.length) {
+    const nombre = session?.nombre ? `, ${session.nombre}` : '';
+    return `Lo siento${nombre}, no encontré actividades relacionadas con *"${tema}"* en la programación actual de las UVAs.\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
+  }
+
+  // Agrupar por UVA y tomar la próxima ocurrencia de cada una
+  const porUVA = new Map();
+  for (const act of resultados) {
+    if (!porUVA.has(act.uva_nombre)) {
+      porUVA.set(act.uva_nombre, act);
+    }
+  }
+
+  const nombre = session?.nombre ? `¡Claro, ${session.nombre}! ` : '¡Claro! ';
+  let respuesta = `${nombre}Encontré actividades relacionadas con *"${tema}"* en estas UVAs 🌟\n\n`;
+
+  for (const [uva, act] of porUVA) {
+    const hi = (act.hora_inicio || '?').slice(0, 5);
+    const hf = (act.hora_fin   || '?').slice(0, 5);
+    const fechaFmt = formatearFechaEspanol(act.fecha);
+    const em = _emoji(act.actividad);
+    respuesta += `${em} *${uva}*\n   └ ${act.actividad} · ${fechaFmt} ${hi}–${hf}\n`;
+  }
+
+  respuesta += `\n¿Le gustaría más info de alguna UVA en particular? 😊`;
+  return respuesta;
 }
 
 // ─── Guardar historial async (no bloquea la respuesta) ───────────────────────

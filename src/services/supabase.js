@@ -127,6 +127,34 @@ export async function getProgramacionPorFechas(fechas = []) {
   return data || [];
 }
 
+/**
+ * Búsqueda temática: busca actividades por palabras clave en TODAS las UVAs.
+ * Útil para preguntas como "¿en qué UVA hay agroecología?" o "dónde hay danza?"
+ * @param {string[]} keywords  — palabras clave (lowercase)
+ * @param {string}   fechaDesde — YYYY-MM-DD
+ * @param {string}   fechaHasta — YYYY-MM-DD
+ * @returns {Promise<Array>}
+ */
+export async function buscarActividadesPorTema(keywords = [], fechaDesde, fechaHasta) {
+  if (!keywords.length) return [];
+
+  const { data, error } = await supabase
+    .from('programacion_uva')
+    .select('uva_nombre,fecha,hora_inicio,hora_fin,actividad,descripcion,edad_recomendada')
+    .gte('fecha', fechaDesde)
+    .lte('fecha', fechaHasta)
+    .order('uva_nombre', { ascending: true })
+    .order('fecha',      { ascending: true })
+    .order('hora_inicio', { ascending: true });
+
+  if (error || !data) return [];
+
+  return data.filter((row) => {
+    const texto = `${row.actividad || ''} ${row.descripcion || ''}`.toLowerCase();
+    return keywords.some((kw) => texto.includes(kw));
+  });
+}
+
 // ─── Helpers de conversaciones ───────────────────────────────────────────────
 
 /**
