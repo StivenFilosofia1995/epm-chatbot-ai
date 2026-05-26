@@ -78,13 +78,18 @@ def ops_disconnect(_admin: Annotated[str, Depends(get_current_admin)]):
 def ops_insights(_admin: Annotated[str, Depends(get_current_admin)]):
     now = datetime.now(timezone.utc)
     since_24h = (now - timedelta(hours=24)).isoformat()
-    since_7d = (now - timedelta(days=7)).isoformat()
+    since_7d  = (now - timedelta(days=7)).isoformat()
 
-    total_contactos = _count_rows('contactos')
-    total_mensajes = _count_rows('mensajes')
-    mensajes_24h = _count_rows('mensajes', lambda q: q.gte('created_at', since_24h))
-    mensajes_7d = _count_rows('mensajes', lambda q: q.gte('created_at', since_7d))
-    conversaciones_24h = _count_rows('conversaciones', lambda q: q.gte('created_at', since_24h))
+    # El bot guarda mensajes en 'conversaciones' (rol = 'user' | 'assistant')
+    # y un registro por usuario en 'memoria_agente'
+    total_contactos  = _count_rows('memoria_agente')
+    total_mensajes   = _count_rows('conversaciones')
+    mensajes_24h     = _count_rows('conversaciones', lambda q: q.gte('created_at', since_24h))
+    mensajes_7d      = _count_rows('conversaciones', lambda q: q.gte('created_at', since_7d))
+    conversaciones_24h = _count_rows(
+        'conversaciones',
+        lambda q: q.gte('created_at', since_24h).eq('rol', 'user'),
+    )
     chats_humano = _count_rows('chat_control', lambda q: q.eq('modo', 'humano'))
 
     return {
