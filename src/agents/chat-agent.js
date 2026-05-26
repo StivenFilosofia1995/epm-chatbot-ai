@@ -180,6 +180,14 @@ const UVA_ALIASES = {
   'san fernando':                  'UVA San Fernando',
   'uva itagui':                    'UVA San Fernando',
   'uva itagüi':                    'UVA San Fernando',
+
+  // ── Espacios complementarios EPM ────────────────────────────────
+  'biblioteca epm':                'Biblioteca EPM',
+  'biblioteca':                    'Biblioteca EPM',
+  'museo del agua':                'Museo del Agua',
+  'museo agua':                    'Museo del Agua',
+  'museo epm':                     'Museo del Agua',
+  'pies descalzos':                'Museo del Agua',
 };
 
 // ─── Máquina de estados principal ────────────────────────────────────────────
@@ -273,6 +281,14 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     return { respuesta, uva: null, barrio: null, fecha: hoyISO() };
   }
 
+  // ── 3b. BÚSQUEDA TEMÁTICA antes del saludo — funciona sin importar el estado ──
+  if (_esBusquedaTematica(mensaje)) {
+    const respuesta = await _respuestaTematica(mensaje, session);
+    _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio || null, null);
+    _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
+    return { respuesta, uva: null, barrio: session.barrio || null, fecha: hoyISO() };
+  }
+
   // ── 3. ESTADO SALUDO: todavía no sabemos la UVA → preguntar (0 tokens) ──
   if (session.estado === 'saludo') {
     const respuesta = _mensajeSaludo(session.nombre);
@@ -287,13 +303,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
     return { respuesta, uva: session.uva, barrio: session.barrio, fecha: hoyISO() };
   }
-  // ── 4b. BÚSqueda temática: "¿en qué UVA hay X?" — cruza todas las UVAs ──────
-  if (_esBusquedaTematica(mensaje)) {
-    const respuesta = await _respuestaTematica(mensaje, session);
-    _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio || null, null);
-    _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
-    return { respuesta, uva: null, barrio: session.barrio || null, fecha: hoyISO() };
-  }
+
   // ── 4. ESTADO ACTIVO: tenemos UVA → flujo completo ───────────────────────
   const alcanceTemporal = parsearAlcanceTemporal(mensaje);
   const fechaSolicitada = alcanceTemporal.fechaInicio;
@@ -365,6 +375,17 @@ function _extraerInfoGratis(mensaje, session, sessionId) {
 
   // Barrio / UVA
   if (!session.uva) {
+    // Intento 0: nombre directo de recinto (Biblioteca EPM, Museo del Agua, nombre de UVA)
+    const directa = _extraerUVADirecta(mensaje);
+    if (directa && _esUVACanonica(directa)) {
+      session.uva = directa;
+      session.barrio = directa;
+      session.estado = 'activo';
+      setSession(sessionId, { uva: directa, barrio: directa, estado: 'activo' });
+      log(`Recinto directo (alias): ${directa}`);
+      return;
+    }
+
     // Intento 1: Python NER con difflib (más preciso, maneja variantes)
     const ner = _nerBarrioPython(mensaje);
     if (ner?.found && ner.score >= 0.75) {
@@ -796,9 +817,9 @@ function _fallback(uva, md) {
   return _sinDatos(uva);
 }
 
-// ─── Búsqueda temática: "¿en qué UVA hay X?" ────────────────────────────────
+// ─── Búsqueda temática: "¿en qué UVA hay X?" / "busco X" / "quiero X" ───────
 
-const PATRON_BUSQUEDA_TEMATICA = /(?:en\s+(?:cu[aá]l(?:es)?|qu[eé])\s+uva|qu[eé]\s+uvas?\s+(?:tiene[n]?|ofrece[n]?|hay|tienen)\s+|d[oó]nde\s+hay\s+|en\s+qu[eé]\s+lugar(?:es)?\s+hay\s+|cu[aá]les?\s+uvas?\s+(?:tienen?|hacen?|ofrecen?)\s+)/i;
+const PATRON_BUSQUEDA_TEMATICA = /(?:en\s+(?:cu[aá]l(?:es)?|qu[eé])\s+uva|qu[eé]\s+uvas?\s+(?:tiene[n]?|ofrece[n]?|hay|tienen)\s+|d[oó]nde\s+hay\s+|en\s+qu[eé]\s+lugar(?:es)?\s+hay\s+|cu[aá]les?\s+uvas?\s+(?:tienen?|hacen?|ofrecen?)\s+|busco\s+(?:clases?|talleres?|cursos?|actividades?|algo\s+de)\s+|quiero\s+(?:clases?|talleres?|cursos?|algo\s+de)\s+|hay\s+(?:clases?|talleres?|cursos?|actividades?)\s+de\s+|me\s+interes[ae]\s+|quisiera\s+(?:aprender|hacer|tomar))/i;
 
 /**
  * Detecta si el mensaje es una búsqueda transversal de tema en todas las UVAs.
