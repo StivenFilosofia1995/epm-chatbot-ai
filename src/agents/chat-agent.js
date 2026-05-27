@@ -45,11 +45,17 @@ export const UVA_NOMBRES = Object.freeze([
   'UVA San Fernando',
 ]);
 
+/** Espacios complementarios EPM con programación (no son UVAs pero tienen agenda) */
+export const ESPACIOS_COMPLEMENTARIOS = Object.freeze([
+  'Biblioteca EPM',
+  'Museo del Agua',
+  'Parque de los Deseos',
+]);
+
 /** Todos los recintos EPM con programación (UVAs + espacios complementarios) */
 export const RECINTOS_EPM = Object.freeze([
   ...UVA_NOMBRES,
-  'Biblioteca EPM',
-  'Museo del Agua',
+  ...ESPACIOS_COMPLEMENTARIOS,
 ]);
 
 const MUNICIPIOS_SIN_COBERTURA = Object.freeze([
@@ -70,6 +76,10 @@ const MUNICIPIOS_SIN_COBERTURA = Object.freeze([
 
 function _esUVACanonica(nombre) {
   return typeof nombre === 'string' && UVA_NOMBRES.includes(nombre);
+}
+
+function _esRecintoEPMValido(nombre) {
+  return typeof nombre === 'string' && RECINTOS_EPM.includes(nombre);
 }
 
 // Auto-trigger de scraping: sólo una vez cada 2 h para no saturar
@@ -188,6 +198,12 @@ const UVA_ALIASES = {
   'museo agua':                    'Museo del Agua',
   'museo epm':                     'Museo del Agua',
   'pies descalzos':                'Museo del Agua',
+  'parque pies descalzos':         'Museo del Agua',
+  'parque descalzos':              'Museo del Agua',
+  'parque de los deseos':          'Parque de los Deseos',
+  'parque deseos':                 'Parque de los Deseos',
+  'los deseos':                    'Parque de los Deseos',
+  'deseos':                        'Parque de los Deseos',
 };
 
 // ─── Máquina de estados principal ────────────────────────────────────────────
@@ -206,8 +222,8 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     session.historial = [];
   }
 
-  if (session.uva && !_esUVACanonica(session.uva)) {
-    log(`WARN: sesión tenía UVA inválida "${session.uva}" — reseteando`);
+  if (session.uva && !_esRecintoEPMValido(session.uva)) {
+    log(`WARN: sesión tenía recinto inválido "${session.uva}" — reseteando`);
     session.uva = null;
     session.barrio = null;
     session.estado = 'saludo';
@@ -252,8 +268,8 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     limpiarHistorialSesion(sessionId).catch((err) => log(`WARN: no pude limpiar historial al cambiar UVA: ${err.message}`));
 
     const respuesta = session.nombre
-      ? `Listo ${session.nombre} 👍 ¿Qué barrio o comuna de Medellín desea consultar ahora?`
-      : 'Listo 👍 ¿Qué barrio o comuna de Medellín desea consultar ahora?';
+      ? `Listo ${session.nombre} 👍 ¿Qué barrio, UVA o espacio EPM desea consultar ahora?`
+      : 'Listo 👍 ¿Qué barrio, UVA o espacio EPM desea consultar ahora?';
 
     _guardarHistorialAsync(sessionId, mensaje, respuesta, null, null);
     _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
@@ -377,7 +393,7 @@ function _extraerInfoGratis(mensaje, session, sessionId) {
   if (!session.uva) {
     // Intento 0: nombre directo de recinto (Biblioteca EPM, Museo del Agua, nombre de UVA)
     const directa = _extraerUVADirecta(mensaje);
-    if (directa && _esUVACanonica(directa)) {
+    if (directa && _esRecintoEPMValido(directa)) {
       session.uva = directa;
       session.barrio = directa;
       session.estado = 'activo';
@@ -489,6 +505,8 @@ function _quiereOtraUVA(texto = '') {
     'otra comuna',
     'otro barrio',
     'otra zona',
+    'otro parque',
+    'otro espacio',
   ].some((k) => t.includes(k));
 }
 
@@ -585,8 +603,8 @@ async function _obtenerAgendaMD(uvaNombre, alcanceTemporal) {
   const esSemana = alcanceTemporal?.modo === 'semana';
   const fecha = alcanceTemporal?.fechaInicio || hoyISO();
 
-  if (!_esUVACanonica(uvaNombre)) {
-    log(`ERROR: consulta de agenda con UVA inválida "${uvaNombre}"`);
+  if (!_esRecintoEPMValido(uvaNombre)) {
+    log(`ERROR: consulta de agenda con recinto inválido "${uvaNombre}"`);
     return _sinDatos(uvaNombre);
   }
 
@@ -679,10 +697,10 @@ async function _proximasActividadesUVA(uvaNombre, fechaDesde, limite = 4) {
 function _esUVAValida(nombre) {
   if (!nombre || typeof nombre !== 'string') return false;
   const n = nombre.trim();
-  if (!n.startsWith('UVA ')) return false;
+  if (!n.startsWith('UVA ') && !ESPACIOS_COMPLEMENTARIOS.includes(n)) return false;
   if (/\bprogramaci[oó]n\b/i.test(n)) return false;
   if (/\bUVA\s+ba\b/i.test(n)) return false;
-  return n.length >= 8;
+  return n.length >= 4;
 }
 
 /** Retorna true cuando el contexto NO contiene datos reales (no llamar a Groq).
@@ -789,6 +807,7 @@ function _emoji(actividad = '') {
   if (/ecolog|natura|huerta/.test(a))                                return '🌿';
   if (/tecno|computa|digital/.test(a))                               return '💻';
   if (/cine|película/.test(a))                                       return '🎬';
+  if (/parque|deseos|pies descalzos|astronomía|telescopio/.test(a))  return '🌟';
   return '✨';
 }
 
@@ -797,16 +816,20 @@ function _emoji(actividad = '') {
 function _mensajeSaludo(nombre) {
   if (nombre) {
     return (
-      `¡Hola ${nombre}! 😊 Para buscarle la programación de su UVA más cercana, ` +
-      `¿en qué *barrio, zona o comuna* de Medellín vive? 🏙️`
+      `¡Hola ${nombre}! 😊 Tengo la programación de las *14 UVAs*, el *Museo del Agua*, ` +
+      `la *Biblioteca EPM* y el *Parque de los Deseos*.\n\n` +
+      `¿Desde qué *barrio, UVA o espacio EPM* le busco la programación? 🏙️`
     );
   }
   return (
-    `¡Hola! 👋 Soy el asistente de las *UVAs de Medellín* — espacios culturales de la Fundación EPM.\n\n` +
-    `Para ayudarle, cuénteme:\n` +
+    `¡Hola! 👋 Soy el asistente de la *Fundación EPM*. Le ayudo con la programación de:\n\n` +
+    `🍇 Las *14 UVAs* de Medellín, Bello e Itagüí\n` +
+    `📚 *Biblioteca EPM*\n` +
+    `💧 *Museo del Agua* (Parque Pies Descalzos)\n` +
+    `🌟 *Parque de los Deseos*\n\n` +
+    `Para empezar, cuénteme:\n` +
     `1️⃣ ¿Cuál es su nombre?\n` +
-    `2️⃣ ¿En qué *barrio, zona o comuna* de Medellín vive? 🏙️\n\n` +
-    `Con eso le encuentro su *UVA más cercana* y le comparto toda la programación 🍇`
+    `2️⃣ ¿Qué *barrio, UVA o espacio* desea consultar? 🏙️`
   );
 }
 
