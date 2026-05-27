@@ -54,11 +54,7 @@ def add(uva, act, days, hi, hf, edad=None, month=6):
 # ══════════════════════════════════════════════════════════════════════════
 
 # ─── MUSEO DEL AGUA — mayo 28-31 ─────────────────────────────────────────
-# Fuente: programación oficial Issuu mayo 2026 (páginas 2-3 de 4 confirmadas)
-add("Museo del Agua","Museo enseña: Guardianes de Gaia — llaveros que fluyen con la vida",
-    [30],   "14:00","16:00","General",                                          5)
-add("Museo del Agua","Museo para tod@s: acceso gratuito y recorridos en familia",
-    [30],   "09:30","16:00","Niños (8-12) / General",                           5)
+# Nota: Mayo 30 ya fue insertado por seed_museo_agua_mayo2026.py — no duplicar
 # Nota: Taller "Velas para el alma" fue el 21 mayo (ya pasó), no aplica parche
 
 # ─── PARQUE DE LOS DESEOS — mayo 28-31 ───────────────────────────────────
@@ -312,8 +308,8 @@ for i in range(0, total, BATCH):
     try:
         client.table("programacion_uva").insert(batch).execute()
         inserted += len(batch)
-        print(f"  ✓ {inserted}/{total}")
+        print(f"  OK {inserted}/{total}")
     except Exception as e:
-        print(f"  ✗ Error en lote {i//BATCH + 1}: {e}")
+        print(f"  ERROR lote {i//BATCH + 1}: {e}")
 
-print(f"\n✅ Listo. {inserted}/{total} actividades insertadas en programacion_uva.")
+print(f"\nListo. {inserted}/{total} actividades insertadas en programacion_uva.")
