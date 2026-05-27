@@ -230,7 +230,9 @@ Ejemplos:
   try {
     const raw = completion.choices[0]?.message?.content?.trim();
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.map(k => String(k).toLowerCase()) : [];
+    return Array.isArray(arr) ? arr.map(k =>
+      String(k).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    ) : [];
   } catch {
     return [];
   }

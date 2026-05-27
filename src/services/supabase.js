@@ -158,7 +158,9 @@ export async function buscarActividadesPorTema(keywords, fechaDesde, fechaHasta,
   if (error || !data) return [];
 
   return data.filter((row) => {
-    const texto = `${row.actividad || ''} ${row.descripcion || ''}`.toLowerCase();
+    const texto = `${row.actividad || ''} ${row.descripcion || ''}`
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     return keywords.some((kw) => texto.includes(kw));
   });
 }
