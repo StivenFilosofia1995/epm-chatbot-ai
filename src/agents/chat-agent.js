@@ -11,7 +11,7 @@
  *  - Historial guardado async: no bloquea la respuesta al usuario
  */
 
-import { generarRespuesta, extraerBarrioConIA } from '../services/groq.js';
+import { generarRespuesta, extraerBarrioConIA, clasificarIntencion } from '../services/groq.js';
 import {
   getProgramacion,
   getProgramacionPorFecha,
@@ -232,7 +232,24 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     limpiarHistorialSesion(sessionId).catch((err) => log(`WARN: no pude limpiar historial inválido: ${err.message}`));
   }
 
-  if (_quiereReiniciar(mensaje)) {
+  // ── 1b. Clasificar intención con LLM (fallback: regex) ─────────────────
+  let intent = 'normal';
+  let intentKeywords = [];
+  try {
+    const clf = await clasificarIntencion(mensaje);
+    intent = clf.intent;
+    intentKeywords = clf.keywords;
+    log(`Intención: ${intent} | keywords: ${intentKeywords.join(', ')}`);
+  } catch (err) {
+    log(`WARN: clasificarIntencion falló — usando regex fallback: ${err.message}`);
+    if (_quiereReiniciar(mensaje))                intent = 'reset';
+    else if (_quiereOtraUVA(mensaje))             intent = 'cambio_uva';
+    else if (_quiereLinkOficial(mensaje))         intent = 'enlace';
+    else if (_esBusquedaTematica(mensaje))        intent = 'tematica';
+    else if (_esMensajeCortoContinuacion(mensaje)) intent = 'continuacion';
+  }
+
+  if (intent === 'reset') {
     const nombrePrevio = session.nombre;
     session.nombre = null;
     session.barrio = null;
@@ -259,7 +276,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
   }
 
   // Intento explícito: cambiar de UVA sin arrastrar agenda previa
-  if (_quiereOtraUVA(mensaje)) {
+  if (intent === 'cambio_uva' && session.estado === 'activo') {
     session.barrio = null;
     session.uva = null;
     session.estado = 'saludo';
@@ -277,7 +294,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
   }
 
   // Intento explícito: pedir enlace oficial (responder directo, sin Groq)
-  if (_quiereLinkOficial(mensaje)) {
+  if (intent === 'enlace') {
     const respuesta = `Claro. Este es el enlace oficial de programación UVA:\n${EPM_LINK}`;
     _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio || null, session.uva || null);
     _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
@@ -298,8 +315,8 @@ export async function procesarMensaje({ sessionId, mensaje }) {
   }
 
   // ── 3b. BÚSQUEDA TEMÁTICA antes del saludo — funciona sin importar el estado ──
-  if (_esBusquedaTematica(mensaje)) {
-    const respuesta = await _respuestaTematica(mensaje, session);
+  if (intent === 'tematica') {
+    const respuesta = await _respuestaTematica(mensaje, session, intentKeywords.length ? intentKeywords : null);
     _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio || null, null);
     _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
     return { respuesta, uva: null, barrio: session.barrio || null, fecha: hoyISO() };
@@ -337,7 +354,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     // Si IA detectó la UVA → continuar al flujo activo (fall-through)
   }
 
-  if (_esMensajeCortoContinuacion(mensaje)) {
+  if (intent === 'continuacion') {
     const respuesta = _respuestaContinuacion(session);
     _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio, session.uva);
     _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
@@ -897,13 +914,22 @@ function _esBusquedaTematica(texto = '') {
  * Extrae keywords del mensaje en crudo y delega la respuesta a Groq
  * para que maneje cualquier formulación naturalmente.
  */
-async function _respuestaTematica(mensaje, session) {
-  const keywords = mensaje
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((p) => p.length >= 3 && !_STOPWORDS_TEMA.has(p));
+async function _respuestaTematica(mensaje, session, preKeywords = null) {
+  let keywords;
+  if (preKeywords && preKeywords.length) {
+    // Keywords ya extraídas por clasificarIntencion (LLM) — limpiar tildes
+    keywords = [...new Set(preKeywords.map(k =>
+      k.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    ))];
+  } else {
+    // Extraer keywords del mensaje en crudo
+    keywords = mensaje
+      .toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((p) => p.length >= 3 && !_STOPWORDS_TEMA.has(p));
+  }
 
   if (!keywords.length) {
     return '¿Sobre qué tipo de actividad quiere buscar? Cuénteme y busco en todas las UVAs 😊';
@@ -913,7 +939,7 @@ async function _respuestaTematica(mensaje, session) {
   const allKeywords = [...new Set([...keywords, ...raices])];
 
   const hoy = hoyISO();
-  const fin = sumarDias(hoy, 60);
+  const fin = sumarDias(hoy, 90);
 
   let resultados = [];
   try {
@@ -923,8 +949,17 @@ async function _respuestaTematica(mensaje, session) {
   }
 
   if (!resultados.length) {
+    // Último intento: raíces de 4 letras en 90 días
+    const raicesCortas = [...new Set(allKeywords.map(k => k.slice(0, 4)).filter(k => k.length >= 4))];
+    try {
+      resultados = await buscarActividadesPorTema(raicesCortas, hoy, fin, [...RECINTOS_EPM]);
+    } catch {}
+  }
+
+  if (!resultados.length) {
     const nombre = session?.nombre ? `, ${session.nombre}` : '';
-    return `Lo siento${nombre}, no encontré actividades sobre ese tema en la programación actual de las UVAs.\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
+    const temaDisplay = (preKeywords && preKeywords.length ? preKeywords.join(' ') : allKeywords.slice(0, 2).join(' ')) || 'ese tema';
+    return `Lo siento${nombre}, no encontré actividades de *"${temaDisplay}"* en los próximos 3 meses.\n\nConsulte la agenda oficial: https://www.grupo-epm.com/site/fundacionepm/programacion/\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
   }
 
   const _fechaCorta = (iso) => {
