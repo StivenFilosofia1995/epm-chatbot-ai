@@ -11,7 +11,7 @@
  *  - Historial guardado async: no bloquea la respuesta al usuario
  */
 
-import { generarRespuesta } from '../services/groq.js';
+import { generarRespuesta, extraerBarrioConIA } from '../services/groq.js';
 import {
   getProgramacion,
   getProgramacionPorFecha,
@@ -21,7 +21,7 @@ import {
   getHistorialSesion,
   limpiarHistorialSesion,
 } from '../services/supabase.js';
-import { extraerBarrioDeTexto } from './geo-agent.js';
+import { extraerBarrioDeTexto, resolverUVA } from './geo-agent.js';
 import { BARRIOS_UVA, COMUNAS_UVA } from '../data/barrios-uva-map.js';
 import { parsearAlcanceTemporal, hoyISO, formatearFechaEspanol, sumarDias, nombreDia } from '../utils/date-helper.js';
 import { getSession, setSession } from '../utils/session-cache.js';
@@ -307,10 +307,34 @@ export async function procesarMensaje({ sessionId, mensaje }) {
 
   // ── 3. ESTADO SALUDO: todavía no sabemos la UVA → preguntar (0 tokens) ──
   if (session.estado === 'saludo') {
-    const respuesta = _mensajeSaludo(session.nombre);
-    _guardarHistorialAsync(sessionId, mensaje, respuesta, null, null);
-    _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
-    return { respuesta, uva: null, barrio: null, fecha: hoyISO() };
+    // Fallback IA: si el mensaje tiene contenido y los detectores rápidos fallaron,
+    // usar Groq para extraer el barrio del texto libre del usuario.
+    if (!session.uva && mensaje.trim().length > 4) {
+      try {
+        const barrioIA = await extraerBarrioConIA(mensaje, Object.keys(BARRIOS_FLAT));
+        if (barrioIA) {
+          const geo = resolverUVA(barrioIA);
+          if (geo.encontrado && _esUVACanonica(geo.uva)) {
+            session.barrio = geo.barrioNormalizado;
+            session.uva = geo.uva;
+            session.estado = 'activo';
+            setSession(sessionId, { barrio: geo.barrioNormalizado, uva: geo.uva, estado: 'activo' });
+            log(`Barrio (Groq IA fallback): "${barrioIA}" → ${geo.uva}`);
+          }
+        }
+      } catch (err) {
+        log(`WARN: extraerBarrioConIA falló: ${err.message}`);
+      }
+    }
+
+    // Si después del fallback IA seguimos sin UVA, enviar saludo
+    if (session.estado === 'saludo') {
+      const respuesta = _mensajeSaludo(session.nombre);
+      _guardarHistorialAsync(sessionId, mensaje, respuesta, null, null);
+      _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
+      return { respuesta, uva: null, barrio: null, fecha: hoyISO() };
+    }
+    // Si IA detectó la UVA → continuar al flujo activo (fall-through)
   }
 
   if (_esMensajeCortoContinuacion(mensaje)) {
