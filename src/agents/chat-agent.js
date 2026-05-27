@@ -538,6 +538,13 @@ function _quiereReiniciar(texto = '') {
   const t = (texto || '').toLowerCase();
   return [
     'volvamos a empezar',
+    'empecemos de nuevo',
+    'empecemos de cero',
+    'empezar de nuevo',
+    'comenzar de nuevo',
+    'comenzamos de nuevo',
+    'nueva conversacion',
+    'nueva conversación',
     'reiniciar',
     'reinicia',
     'reset',
@@ -868,8 +875,15 @@ function _fallback(uva, md) {
 
 const PATRON_BUSQUEDA_TEMATICA = /(?:en\s+(?:cu[aá]l(?:es)?|qu[eé])\s+uva|qu[eé]\s+uvas?\s+(?:tiene[n]?|ofrece[n]?|hay|tienen)\s+|d[oó]nde\s+hay\s+|en\s+qu[eé]\s+lugar(?:es)?\s+hay\s+|cu[aá]les?\s+uvas?\s+(?:tienen?|hacen?|ofrecen?)\s+|busco\s+(?:clases?|talleres?|cursos?|actividades?|algo\s+de)\s+|quiero\s+(?:clases?|talleres?|cursos?|algo\s+de)\s+|hay\s+(?:clases?|talleres?|cursos?|actividades?)\s+de\s+|me\s+interes[ae]\s+|quisiera\s+(?:aprender|hacer|tomar)|qu[eé]\s+hay\s+(?:\w+\s+){0,5}de\s+|qu[eé]\s+tienen?\s+(?:\w+\s+){0,3}de\s+|hay\s+algo\s+de\s+|tienen?\s+(?:clases?|talleres?|cursos?|algo|programaci[oó]n)\s+de\s+|qu[eé]\s+(?:programaci[oó]n|actividades?)\s+(?:hay|tienen?|ofrecen?)|qu[eé]\s+(?:ofrecen?|tienen?|hacen?)\s+(?:de|sobre)\s+)/i;
 
-const _TEMPORAL_NOISE = /\b(hoy|ma[nñ]ana|ayer|esta semana|este mes|este año|este ano|esta temporada|proximo|próximo|siguiente|ahora|actualmente)\b/gi;
-const _STOPWORDS_TEMA = new Set(['este','esta','estos','estas','para','pero','como','algo','alguna','alguno','algunos','algunas','donde','cuando','cual','cuales','unas','unos']);
+const _STOPWORDS_TEMA = new Set([
+  'que','hay','de','en','la','el','lo','los','las','un','una','con','por',
+  'me','mi','te','se','si','es','son','ser','para','pero','como','mas','muy',
+  'bien','solo','todo','toda','todos','todas','este','esta','estos','estas',
+  'quiero','saber','busco','busca','sobre','acerca','tengo','tiene','poder',
+  'hacer','tener','cual','cuales','donde','cuando','algo','alguna','alguno',
+  'algunos','algunas','unas','unos','del','sus','les','nos','ver','sin','entre',
+  'pues','puse','aqui','alli','alla','aca','uva','uvas',
+]);
 
 /**
  * Detecta si el mensaje es una búsqueda transversal de tema en todos los recintos EPM.
@@ -880,52 +894,39 @@ function _esBusquedaTematica(texto = '') {
 
 /**
  * Responde a búsquedas temáticas buscando en todos los recintos EPM.
+ * Extrae keywords del mensaje en crudo y delega la respuesta a Groq
+ * para que maneje cualquier formulación naturalmente.
  */
 async function _respuestaTematica(mensaje, session) {
-  // Extraer el tema del mensaje (lo que viene después del patrón)
-  const tema = mensaje
-    .replace(PATRON_BUSQUEDA_TEMATICA, '')
-    .replace(_TEMPORAL_NOISE, '')
-    .replace(/[?¿!¡.,]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  const keywords = mensaje
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((p) => p.length >= 3 && !_STOPWORDS_TEMA.has(p));
 
-  if (!tema || tema.length < 3) {
+  if (!keywords.length) {
     return '¿Sobre qué tipo de actividad quiere buscar? Cuénteme y busco en todas las UVAs 😊';
   }
 
-  // Generar keywords: el tema completo + palabras individuales de ≥4 letras
-  // + raíces cortas para cubrir variantes (ej: "robótica" → "robot")
-  const palabras = tema
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // quitar tildes
-    .split(/\s+/).filter((p) => p.length >= 4 && !_STOPWORDS_TEMA.has(p));
+  const raices = keywords.map((p) => p.slice(0, Math.max(4, p.length - 2)));
+  const allKeywords = [...new Set([...keywords, ...raices])];
 
-  const raices = palabras.map((p) => p.slice(0, Math.max(4, p.length - 2)));
-  const keywords = [...new Set([
-    tema,
-    tema.normalize('NFD').replace(/[\u0300-\u036f]/g, ''),  // sin tildes
-    ...palabras,
-    ...raices,
-  ])];
-
-  // Buscar solo desde hoy en adelante (no mostrar eventos pasados)
   const hoy = hoyISO();
-  const fin = sumarDias(hoy, 60);  // hasta 60 días adelante
+  const fin = sumarDias(hoy, 60);
 
   let resultados = [];
   try {
-    resultados = await buscarActividadesPorTema(keywords, hoy, fin, [...RECINTOS_EPM]);
+    resultados = await buscarActividadesPorTema(allKeywords, hoy, fin, [...RECINTOS_EPM]);
   } catch (err) {
     log(`Error búsqueda temática: ${err.message}`);
   }
 
   if (!resultados.length) {
     const nombre = session?.nombre ? `, ${session.nombre}` : '';
-    return `Lo siento${nombre}, no encontré actividades relacionadas con *"${tema}"* en la programación actual de las UVAs.\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
+    return `Lo siento${nombre}, no encontré actividades sobre ese tema en la programación actual de las UVAs.\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
   }
 
-  // Agrupar por UVA → por actividad, colectando todas las fechas
   const _fechaCorta = (iso) => {
     const [y, m, d] = iso.split('-').map(Number);
     const dt = new Date(y, m - 1, d);
@@ -943,25 +944,22 @@ async function _respuestaTematica(mensaje, session) {
     actMap.get(key).fechas.push(act.fecha);
   }
 
-  const nombre = session?.nombre ? `¡Claro, ${session.nombre}! ` : '¡Claro! ';
-  let respuesta = `${nombre}Encontré actividades relacionadas con *"${tema}"* 🌟\n\n`;
-
+  let contexto = 'BÚSQUEDA TRANSVERSAL — actividades encontradas en múltiples recintos EPM:\n\n';
   for (const [uva, actMap] of porUVA) {
-    const em = _emoji(uva);
-    respuesta += `${em} *${uva}*\n`;
+    contexto += `${uva}:\n`;
     for (const act of actMap.values()) {
       const hi = (act.hora_inicio || '?').slice(0, 5);
       const hf = (act.hora_fin   || '?').slice(0, 5);
       const fechasFmt = act.fechas.map(_fechaCorta).join(', ');
-      respuesta += `   └ ${act.actividad}\n      📅 ${fechasFmt} · ${hi}–${hf}\n`;
+      contexto += `  - ${act.actividad} | ${fechasFmt} | ${hi}\u2013${hf}`;
+      if (act.rango_edad) contexto += ` | ${act.rango_edad}`;
+      contexto += '\n';
     }
-    respuesta += '\n';
+    contexto += '\n';
   }
 
-  respuesta += `¿Le gustaría más info de alguna UVA en particular? 😊`;
-  return respuesta;
+  return generarRespuesta(session?.historial || [], mensaje, contexto, session?.nombre || null, null);
 }
-
 // ─── Guardar historial async (no bloquea la respuesta) ───────────────────────
 
 function _guardarHistorialAsync(sessionId, msgUsuario, msgBot, barrio, uva) {
