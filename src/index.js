@@ -17,6 +17,7 @@ import { extraerActividadesPlano } from './agents/parser-agent.js';
 import { hoyISO, sumarDias } from './utils/date-helper.js';
 import { iniciarWhatsApp, getSock, getLastQRInfo } from './whatsapp/whatsapp.js';
 import { deleteSession } from './whatsapp/session-store.js';
+import { deleteSession as deleteChatSession, limpiarCacheSesiones } from './utils/session-cache.js';
 import { waRouter } from './whatsapp/api.js';
 
 const app = express();
@@ -356,6 +357,18 @@ app.post('/api/wa/reiniciar', async (req, res) => {
 app.use('/wa', waRouter);
 
 // ─── Proxy /api → FastAPI admin backend (127.0.0.1:8001) ────────────────────
+
+// Interceptores: limpiar caché en memoria antes de delegar al backend Python
+app.post('/api/sessions/reset', (req, _res, next) => {
+  const jid = req.body?.session_id;
+  if (jid) deleteChatSession(jid);
+  next();
+});
+app.post('/api/sessions/reset-all', (_req, _res, next) => {
+  limpiarCacheSesiones();
+  next();
+});
+
 const ADMIN_API_PORT = process.env.ADMIN_INTERNAL_PORT || '8001';
 app.all('/api/*', async (req, res) => {
   const targetUrl = `http://127.0.0.1:${ADMIN_API_PORT}${req.originalUrl}`;
