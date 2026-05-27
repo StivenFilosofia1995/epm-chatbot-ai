@@ -840,25 +840,30 @@ function _fallback(uva, md) {
   return _sinDatos(uva);
 }
 
-// ─── Búsqueda temática: "¿en qué UVA hay X?" / "busco X" / "quiero X" ───────
+// ─── Búsqueda temática ────────────────────────────────────────────────────────
 
-const PATRON_BUSQUEDA_TEMATICA = /(?:en\s+(?:cu[aá]l(?:es)?|qu[eé])\s+uva|qu[eé]\s+uvas?\s+(?:tiene[n]?|ofrece[n]?|hay|tienen)\s+|d[oó]nde\s+hay\s+|en\s+qu[eé]\s+lugar(?:es)?\s+hay\s+|cu[aá]les?\s+uvas?\s+(?:tienen?|hacen?|ofrecen?)\s+|busco\s+(?:clases?|talleres?|cursos?|actividades?|algo\s+de)\s+|quiero\s+(?:clases?|talleres?|cursos?|algo\s+de)\s+|hay\s+(?:clases?|talleres?|cursos?|actividades?)\s+de\s+|me\s+interes[ae]\s+|quisiera\s+(?:aprender|hacer|tomar))/i;
+const PATRON_BUSQUEDA_TEMATICA = /(?:en\s+(?:cu[aá]l(?:es)?|qu[eé])\s+uva|qu[eé]\s+uvas?\s+(?:tiene[n]?|ofrece[n]?|hay|tienen)\s+|d[oó]nde\s+hay\s+|en\s+qu[eé]\s+lugar(?:es)?\s+hay\s+|cu[aá]les?\s+uvas?\s+(?:tienen?|hacen?|ofrecen?)\s+|busco\s+(?:clases?|talleres?|cursos?|actividades?|algo\s+de)\s+|quiero\s+(?:clases?|talleres?|cursos?|algo\s+de)\s+|hay\s+(?:clases?|talleres?|cursos?|actividades?)\s+de\s+|me\s+interes[ae]\s+|quisiera\s+(?:aprender|hacer|tomar)|qu[eé]\s+hay\s+(?:\w+\s+){0,5}de\s+|qu[eé]\s+tienen?\s+(?:\w+\s+){0,3}de\s+|hay\s+algo\s+de\s+|tienen?\s+(?:clases?|talleres?|cursos?|algo|programaci[oó]n)\s+de\s+|qu[eé]\s+(?:programaci[oó]n|actividades?)\s+(?:hay|tienen?|ofrecen?)|qu[eé]\s+(?:ofrecen?|tienen?|hacen?)\s+(?:de|sobre)\s+)/i;
+
+const _TEMPORAL_NOISE = /\b(hoy|ma[nñ]ana|ayer|esta semana|este mes|este año|este ano|esta temporada|proximo|próximo|siguiente|ahora|actualmente)\b/gi;
+const _STOPWORDS_TEMA = new Set(['este','esta','estos','estas','para','pero','como','algo','alguna','alguno','algunos','algunas','donde','cuando','cual','cuales','unas','unos']);
 
 /**
- * Detecta si el mensaje es una búsqueda transversal de tema en todas las UVAs.
+ * Detecta si el mensaje es una búsqueda transversal de tema en todos los recintos EPM.
  */
 function _esBusquedaTematica(texto = '') {
   return PATRON_BUSQUEDA_TEMATICA.test(texto);
 }
 
 /**
- * Responde a búsquedas temáticas buscando en todas las UVAs del mes actual.
+ * Responde a búsquedas temáticas buscando en todos los recintos EPM.
  */
 async function _respuestaTematica(mensaje, session) {
   // Extraer el tema del mensaje (lo que viene después del patrón)
   const tema = mensaje
     .replace(PATRON_BUSQUEDA_TEMATICA, '')
+    .replace(_TEMPORAL_NOISE, '')
     .replace(/[?¿!¡.,]/g, '')
+    .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
 
@@ -870,7 +875,7 @@ async function _respuestaTematica(mensaje, session) {
   // + raíces cortas para cubrir variantes (ej: "robótica" → "robot")
   const palabras = tema
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // quitar tildes
-    .split(/\s+/).filter((p) => p.length >= 4);
+    .split(/\s+/).filter((p) => p.length >= 4 && !_STOPWORDS_TEMA.has(p));
 
   const raices = palabras.map((p) => p.slice(0, Math.max(4, p.length - 2)));
   const keywords = [...new Set([
