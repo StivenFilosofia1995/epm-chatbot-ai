@@ -11,7 +11,7 @@
  *  - Historial guardado async: no bloquea la respuesta al usuario
  */
 
-import { generarRespuesta, extraerBarrioConIA, clasificarIntencion } from '../services/groq.js';
+import { generarRespuesta, extraerBarrioConIA, clasificarIntencion, expandirKeywordsConIA } from '../services/groq.js';
 import {
   getProgramacion,
   getProgramacionPorFecha,
@@ -949,17 +949,21 @@ async function _respuestaTematica(mensaje, session, preKeywords = null) {
   }
 
   if (!resultados.length) {
-    // Último intento: raíces de 4 letras en 90 días
-    const raicesCortas = [...new Set(allKeywords.map(k => k.slice(0, 4)).filter(k => k.length >= 4))];
-    try {
-      resultados = await buscarActividadesPorTema(raicesCortas, hoy, fin, [...RECINTOS_EPM]);
-    } catch {}
+    // Groq expande keywords semánticamente (ej: 'robótica' → 'tecnologia','informatica',...)
+    let keywordsExpandidas = [];
+    try { keywordsExpandidas = await expandirKeywordsConIA(allKeywords); } catch {}
+    if (keywordsExpandidas.length) {
+      try {
+        resultados = await buscarActividadesPorTema(keywordsExpandidas, hoy, fin, [...RECINTOS_EPM]);
+      } catch {}
+    }
   }
 
   if (!resultados.length) {
     const nombre = session?.nombre ? `, ${session.nombre}` : '';
     const temaDisplay = (preKeywords && preKeywords.length ? preKeywords.join(' ') : allKeywords.slice(0, 2).join(' ')) || 'ese tema';
-    return `Lo siento${nombre}, no encontré actividades de *"${temaDisplay}"* en los próximos 3 meses.\n\nConsulte la agenda oficial: https://www.grupo-epm.com/site/fundacionepm/programacion/\n\n¿Quiere que le muestre qué hay disponible en su UVA? 😊`;
+    const ctxNoHay = `El usuario buscó actividades de "${temaDisplay}" en todas las UVAs, Museo del Agua, Biblioteca EPM y Parque de los Deseos para los próximos 3 meses y NO se encontró ninguna actividad relacionada en la base de datos. Informa esto honestamente y proporciona el link oficial: https://www.grupo-epm.com/site/fundacionepm/programacion/`;
+    return generarRespuesta(session?.historial || [], mensaje, ctxNoHay, session?.nombre || null, null);
   }
 
   const _fechaCorta = (iso) => {

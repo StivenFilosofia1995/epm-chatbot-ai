@@ -200,4 +200,79 @@ Ejemplos de barrios: ${muestra}`,
   return resultado === 'ninguno' || !resultado ? null : resultado;
 }
 
+/**
+ * Expande keywords de búsqueda con sinónimos y términos relacionados.
+ * Ej: "robótica" → ["robot", "tecnologia", "informatica", "digital", "programacion"]
+ * @param {string[]} keywords  — palabras clave originales
+ * @returns {Promise<string[]>}
+ */
+export async function expandirKeywordsConIA(keywords) {
+  const tema = keywords.join(', ');
+  const completion = await groq.chat.completions.create({
+    messages: [
+      {
+        role: 'system',
+        content: `Eres un asistente para un chatbot de actividades culturales en Medellín.
+Dado un tema de búsqueda, genera palabras clave relacionadas en español que podrían aparecer en nombres de talleres, cursos o actividades culturales, recreativas o formativas.
+Responde SOLO con un array JSON de strings en minúsculas y sin tildes. Máximo 10 palabras.
+Ejemplos:
+- "robotica" → ["robot","tecnologia","informatica","digital","programacion","stem","ciencia","computacion"]
+- "danza" → ["baile","folclor","urbana","movimiento","ritmo","coreografia"]
+- "cocina" → ["gastronomia","recetas","alimentacion","culinaria","hornear"]`,
+      },
+      { role: 'user', content: tema },
+    ],
+    model: 'llama-3.1-8b-instant',
+    temperature: 0.3,
+    max_tokens: 100,
+  });
+
+  try {
+    const raw = completion.choices[0]?.message?.content?.trim();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.map(k => String(k).toLowerCase()) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Clasifica la intención del mensaje del usuario.
+ * Usa llama-3.1-8b-instant (rápido, barato) con temperature=0.
+ * @param {string} mensaje
+ * @returns {Promise<{intent: string, keywords: string[]}>}
+ */
+export async function clasificarIntencion(mensaje) {
+  const completion = await groq.chat.completions.create({
+    messages: [
+      {
+        role: 'system',
+        content: `Eres un clasificador de intenciones para un chatbot de WhatsApp sobre la Fundación EPM en Medellín (UVAs, Museo del Agua, Biblioteca EPM, Parque de los Deseos).
+
+Clasifica el mensaje en UNA intención. Responde SOLO con JSON válido, sin texto extra.
+
+Intenciones:
+- "reset": quiere reiniciar/empezar de cero la conversación
+- "enlace": pide el link/url/página oficial de programación
+- "cambio_uva": quiere consultar otro barrio, UVA o zona diferente a la suya
+- "tematica": busca un tipo de actividad en todas las UVAs (ej: robótica, danza, yoga, cocina)
+- "continuacion": mensaje corto de confirmación sin pregunta real (ok, gracias, sí, listo, perfecto)
+- "normal": cualquier otra cosa (saludo, consulta de agenda, pregunta por horarios, etc.)
+
+Para "tematica": extrae las palabras clave del tema (solo sustantivos/verbos del tema, sin stopwords).
+
+Formato: {"intent": "...", "keywords": [...]}`,
+      },
+      { role: 'user', content: mensaje },
+    ],
+    model: 'llama-3.1-8b-instant',
+    temperature: 0,
+    max_tokens: 80,
+  });
+
+  const raw = completion.choices[0]?.message?.content?.trim();
+  const parsed = JSON.parse(raw);
+  return { intent: parsed.intent || 'normal', keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [] };
+}
+
 export default groq;
