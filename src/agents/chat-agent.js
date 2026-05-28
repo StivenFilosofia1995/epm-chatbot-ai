@@ -15,6 +15,8 @@ import {
   extraerBarrioConIA,
   clasificarIntencion,
   expandirKeywordsConIA,
+  llamadaConHerramientas,
+  buildSystemPromptTools,
 } from '../services/groq.js';
 
 import {
@@ -23,6 +25,7 @@ import {
   getProgramacionPorFechas,
   buscarActividadesPorTema,
   guardarMensaje,
+  getHistorialSesion,
   limpiarHistorialSesion,
 } from '../services/supabase.js';
 
@@ -200,27 +203,142 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     }
   }
 
-  // ── 6. Obtener contexto de la DB ──────────────────────────────────────────
-  let contexto = null;
+  // ── 6. Groq con herramientas — consulta Supabase y genera respuesta ─────────
+  const historialDB = await getHistorialSesion(sessionId, 25).catch(() => []);
+  const historial = [...session.historial, ...historialDB].slice(-25);
 
-  if (intent === 'tematica' && intentKeywords.length) {
-    contexto = await _contextoTematico(intentKeywords, mensaje);
-  } else if (session.uva) {
-    const alcance = parsearAlcanceTemporal(mensaje);
-    contexto = await _obtenerAgendaMD(session.uva, alcance);
+  let respuesta;
+  try {
+    respuesta = await _generarConHerramientas(mensaje, session, historial);
+    log(`Tool call OK: "${respuesta.slice(0, 80)}..."`);
+  } catch (err) {
+    log(`Error _generarConHerramientas: ${err.message}`);
+    respuesta = _sinDatos(session.uva || 'la UVA');
   }
-
-  // ── 7. Groq genera la respuesta ───────────────────────────────────────────
-  const respuesta = await generarRespuesta(
-    session.historial, mensaje, contexto, session.nombre, session.uva
-  );
-  log(`Groq OK: "${respuesta.slice(0, 80)}..."`);
 
   _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio, session.uva);
   _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
   return { respuesta, uva: session.uva, barrio: session.barrio, fecha: hoyISO() };
 }
 
+// ─── Tool Use: definición de herramientas y loop agentico ──────────────────
+
+const HERRAMIENTAS = [
+  {
+    type: 'function',
+    function: {
+      name: 'obtener_agenda',
+      description: 'Obtiene la programación completa de una UVA o espacio EPM para una fecha. Úsala cuando el usuario pregunta qué hay en su UVA o en cualquier espacio EPM en una fecha.',
+      parameters: {
+        type: 'object',
+        properties: {
+          uva: { type: 'string', description: 'Nombre exacto del espacio. Ej: "UVA de La Armonía", "UVA El Encanto", "Museo del Agua", "Biblioteca EPM", "Parque de los Deseos"' },
+          fecha: { type: 'string', description: 'Fecha en formato YYYY-MM-DD. Usa la fecha de hoy si no se especifica.' },
+        },
+        required: ['uva', 'fecha'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'buscar_actividades',
+      description: 'Busca un tipo de actividad en TODAS las UVAs y espacios EPM. Úsala cuando el usuario pregunta por yoga, danza, robótica, cocina, u otro tema específico sin importar la UVA.',
+      parameters: {
+        type: 'object',
+        properties: {
+          keywords: { type: 'array', items: { type: 'string' }, description: 'Palabras clave del tema. Ej: ["yoga"], ["danza", "baile"], ["robotica", "robot"]' },
+          fecha_desde: { type: 'string', description: 'Fecha inicio YYYY-MM-DD' },
+          fecha_hasta: { type: 'string', description: 'Fecha fin YYYY-MM-DD (máx 60 días)' },
+        },
+        required: ['keywords', 'fecha_desde', 'fecha_hasta'],
+      },
+    },
+  },
+];
+
+async function _ejecutarHerramienta(nombre, args) {
+  try {
+    if (nombre === 'obtener_agenda') {
+      const alcance = { fechaInicio: args.fecha, modo: 'dia' };
+      const md = await _obtenerAgendaMD(args.uva, alcance);
+      return md || `No hay programación disponible para ${args.uva} en ${args.fecha}.`;
+    }
+    if (nombre === 'buscar_actividades') {
+      const raices = (args.keywords || []).map((p) =>
+        p.normalize('NFD').replace(/[\u0300-\u036f]/g, '').slice(0, Math.max(4, p.length - 2))
+      );
+      const allKw = [...new Set([...args.keywords, ...raices])];
+      const resultados = await buscarActividadesPorTema(allKw, args.fecha_desde, args.fecha_hasta, [...RECINTOS_EPM])
+        .catch(() => []);
+      if (!resultados.length) return `No se encontraron actividades de ese tipo entre ${args.fecha_desde} y ${args.fecha_hasta}.`;
+      return _formatearResultadosHerramienta(resultados);
+    }
+    return 'Herramienta no reconocida.';
+  } catch (err) {
+    log(`Error ejecutando herramienta ${nombre}: ${err.message}`);
+    return 'Error al consultar los datos.';
+  }
+}
+
+function _formatearResultadosHerramienta(resultados) {
+  const _fechaCorta = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    const dSem = ['dom','lun','mar','mié','jue','vie','sáb'][dt.getDay()];
+    const mNom = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][m - 1];
+    return `${dSem} ${d} ${mNom}`;
+  };
+  const porUVA = new Map();
+  for (const act of resultados) {
+    if (!porUVA.has(act.uva_nombre)) porUVA.set(act.uva_nombre, new Map());
+    const key = `${act.actividad}|||${act.hora_inicio}|||${act.hora_fin}`;
+    const actMap = porUVA.get(act.uva_nombre);
+    if (!actMap.has(key)) actMap.set(key, { ...act, fechas: [] });
+    actMap.get(key).fechas.push(act.fecha);
+  }
+  let texto = '';
+  for (const [uva, actMap] of porUVA) {
+    texto += `\n${uva}:\n`;
+    for (const act of actMap.values()) {
+      const hi = (act.hora_inicio || '?').slice(0, 5);
+      const hf = (act.hora_fin   || '?').slice(0, 5);
+      texto += `  - ${act.actividad} | ${act.fechas.map(_fechaCorta).join(', ')} | ${hi}\u2013${hf}`;
+      if (act.rango_edad) texto += ` | ${act.rango_edad}`;
+      texto += '\n';
+    }
+  }
+  return texto.trim();
+}
+
+async function _generarConHerramientas(mensaje, session, historial) {
+  const hoy = hoyISO();
+  const messages = [
+    { role: 'system', content: buildSystemPromptTools(session.nombre, session.uva, hoy) },
+    ...historial.map((t) => ({ role: t.rol, content: t.mensaje })),
+    { role: 'user', content: mensaje },
+  ];
+
+  for (let iter = 0; iter < 3; iter++) {
+    const response = await llamadaConHerramientas(messages, HERRAMIENTAS);
+    const choice = response.choices[0];
+
+    if (choice.finish_reason !== 'tool_calls') {
+      return choice.message.content || 'Lo siento, no pude generar una respuesta.';
+    }
+
+    messages.push(choice.message);
+
+    for (const call of choice.message.tool_calls) {
+      const args = JSON.parse(call.function.arguments);
+      log(`Tool: ${call.function.name}(${JSON.stringify(args)})`);
+      const resultado = await _ejecutarHerramienta(call.function.name, args);
+      messages.push({ role: 'tool', tool_call_id: call.id, content: resultado });
+    }
+  }
+
+  return 'Lo siento, no pude procesar tu consulta en este momento.';
+}
 // ─── Contexto temático (búsqueda transversal) ─────────────────────────────────
 
 async function _contextoTematico(intentKeywords, mensaje) {

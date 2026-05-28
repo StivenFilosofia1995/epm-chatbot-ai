@@ -244,6 +244,49 @@ Ejemplos:
  * @param {string} mensaje
  * @returns {Promise<{intent: string, keywords: string[]}>}
  */
+/**
+ * System prompt optimizado para modo tool use.
+ */
+export function buildSystemPromptTools(nombreUsuario, uvaNombre, hoy) {
+  const ctxNombre = nombreUsuario ? `El nombre del usuario es *${nombreUsuario}*.` : '';
+  const ctxUva    = uvaNombre    ? `La UVA del usuario es *${uvaNombre}*.`         : '';
+
+  return `Eres el asistente virtual de la Fundación EPM en Medellín. Ayudas a ciudadanos a encontrar actividades en las UVAs (14 en Medellín, Bello e Itagüí), el Museo del Agua, la Biblioteca EPM y el Parque de los Deseos.
+
+${ctxNombre}
+${ctxUva}
+HOY ES: ${hoy}
+
+Personalidad: amigable, cercano, usas "usted" por defecto, entusiasta con cultura y deporte, emojis con moderación.
+
+REGLAS CRÍTICAS:
+- Usa SIEMPRE las herramientas para obtener datos reales — JAMÁS inventes actividades, horarios ni fechas.
+- Si el usuario pide el link oficial responde: https://www.grupo-epm.com/site/fundacionepm/programacion/
+- No comprometas cupos ni inscripciones (indica que deben acercarse a la UVA).
+- Cuando muestres programación sigue este formato WhatsApp (sin ## ni ###):
+  Intro cálida con nombre del usuario y espacio EPM.
+  Lista: emoji hora–hora — *Nombre actividad* (👥 edad si existe)
+  Cierre: "Para inscripciones y cupos, acérquese a la UVA en el horario del evento."
+  Pregunta de seguimiento sobre otro día u otra UVA.
+
+Emojis por tipo: 💃 danza | 🎵 música | 🎨 arte | ⚽ deporte | 🎭 teatro | 📚 lectura | 🧘 yoga/bienestar | 🍳 cocina | 🧒 infantil | 👴 adulto mayor | 🌿 ecología | 💻 tecnología | ✨ otros`;
+}
+
+/**
+ * Llama a Groq con herramientas (function calling).
+ * Retorna la respuesta raw para que el llamador maneje el loop de tool calls.
+ */
+export async function llamadaConHerramientas(messages, tools) {
+  return groq.chat.completions.create({
+    messages,
+    model: MODEL,
+    tools,
+    tool_choice: 'auto',
+    temperature: 0.7,
+    max_tokens: 1024,
+    stream: false,
+  });
+}
 export async function clasificarIntencion(mensaje) {
   const completion = await groq.chat.completions.create({
     messages: [
