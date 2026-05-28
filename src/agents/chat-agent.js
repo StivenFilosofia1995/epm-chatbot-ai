@@ -260,9 +260,23 @@ const HERRAMIENTAS = [
 async function _ejecutarHerramienta(nombre, args) {
   try {
     if (nombre === 'obtener_agenda') {
-      const alcance = { fechaInicio: args.fecha, modo: 'dia' };
-      const md = await _obtenerAgendaMD(args.uva, alcance);
-      return md || `No hay programación disponible para ${args.uva} en ${args.fecha}.`;
+      try {
+        const actividades = await getProgramacion(args.uva, args.fecha);
+        if (!actividades?.length) {
+          return `No hay actividades programadas en ${args.uva} para ${args.fecha}.`;
+        }
+        let datos = `DATOS REALES — ${args.uva} — ${args.fecha} (${actividades.length} actividades):\n`;
+        for (const act of actividades) {
+          const hi = (act.hora_inicio || '?').slice(0, 5);
+          const hf = (act.hora_fin   || '?').slice(0, 5);
+          datos += `- ${hi}–${hf}: ${act.actividad}`;
+          if (act.edad_recomendada) datos += ` (Edad: ${act.edad_recomendada})`;
+          datos += '\n';
+        }
+        return datos;
+      } catch (err) {
+        return `Error al consultar la agenda de ${args.uva}.`;
+      }
     }
     if (nombre === 'buscar_actividades') {
       const raices = (args.keywords || []).map((p) =>

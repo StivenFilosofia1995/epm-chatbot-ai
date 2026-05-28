@@ -269,7 +269,9 @@ REGLAS CRÍTICAS:
   Cierre: "Para inscripciones y cupos, acérquese a la UVA en el horario del evento."
   Pregunta de seguimiento sobre otro día u otra UVA.
 
-Emojis por tipo: 💃 danza | 🎵 música | 🎨 arte | ⚽ deporte | 🎭 teatro | 📚 lectura | 🧘 yoga/bienestar | 🍳 cocina | 🧒 infantil | 👴 adulto mayor | 🌿 ecología | 💻 tecnología | ✨ otros`;
+Emojis por tipo: 💃 danza | 🎵 música | 🎨 arte | ⚽ deporte | 🎭 teatro | 📚 lectura | 🧘 yoga/bienestar | 🍳 cocina | 🧒 infantil | 👴 adulto mayor | 🌿 ecología | 💻 tecnología | ✨ otros
+
+⚠️ CRÍTICO: Cuando recibas resultados de herramientas, DEBES incluir TODAS las actividades en tu respuesta. El usuario NO ve los resultados de las herramientas — solo ve lo que tú escribes.`;
 }
 
 /**
