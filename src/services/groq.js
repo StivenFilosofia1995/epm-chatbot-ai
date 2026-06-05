@@ -1,13 +1,25 @@
-import Groq from 'groq-sdk';
+/**
+ * groq.js — migrado a Anthropic SDK (Claude)
+ *
+ * Mantiene exactamente las mismas exportaciones que el módulo Groq anterior
+ * para que chat-agent.js no requiera ningún cambio.
+ *
+ * Capa de compatibilidad:
+ *   - llamadaConHerramientas() convierte mensajes/herramientas de formato
+ *     OpenAI ↔ Anthropic automáticamente y devuelve respuesta estilo OpenAI.
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
 import 'dotenv/config';
 
-if (!process.env.GROQ_API_KEY) {
-  throw new Error('[Groq] Falta la variable de entorno GROQ_API_KEY');
+if (!process.env.ANTHROPIC_API_KEY) {
+  throw new Error('[Claude] Falta la variable de entorno ANTHROPIC_API_KEY');
 }
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest';
 
-const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+// ─── System prompt principal ───────────────────────────────────────────────────
 
 function buildSystemPrompt(nombreUsuario, uvaNombre) {
   const saludoNombre = nombreUsuario
@@ -87,7 +99,7 @@ Mapa de UVAs y barrios (para responder preguntas de ubicación — NO inventes a
 - Biblioteca EPM → Centro de Medellín (junto al Parque de los Pies Descalzos)
 - Parque de los Deseos → Frente a la Universidad de Antioquia, Barrio Jesús Nazareno (Calle 64b #52-60)
 
-*Boston NO es una UVA*. Es un barrio dentro de la UVA de La Imaginación. Si el usuario pide info de un barrio que no es el suyo, usa el contexto de esa UVA que se te provee.
+*Boston NO es una UVA*. Es un barrio dentro de la UVA de La Imaginación.
 
 Cuando respondas con programación, respeta EXACTAMENTE esta estructura en 3 partes. NUNCA uses ## ni ### (WhatsApp no los renderiza):
 
@@ -112,127 +124,202 @@ Si el usuario no menciona su barrio, pregúntale:
 "¿En qué barrio o comuna de Medellín vive? 🏘️"`;
 }
 
+// ─── Helpers: conversión OpenAI ↔ Anthropic para tool calling ─────────────────
+
 /**
- * Genera una respuesta conversacional usando Groq.
- * @param {Array<{role: string, content: string}>} historial
- * @param {string} mensajeUsuario
- * @param {string|null} contextoUVA
- * @param {string|null} nombreUsuario
- * @returns {Promise<string>}
+ * Convierte array de mensajes formato OpenAI → Anthropic.
+ * Extrae el system message si es el primero.
+ * Fusiona tool results consecutivos en un único mensaje user.
+ */
+function _convertirMensajes(messages) {
+  let system = '';
+  const converted = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      system += (system ? '\n\n' : '') + (msg.content || '');
+      continue;
+    }
+
+    // Tool result → user message con content array tool_result
+    if (msg.role === 'tool') {
+      const toolResult = {
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id,
+        content: String(msg.content ?? ''),
+      };
+      const last = converted[converted.length - 1];
+      if (last?.role === 'user' && Array.isArray(last.content) && last.content[0]?.type === 'tool_result') {
+        last.content.push(toolResult);
+      } else {
+        converted.push({ role: 'user', content: [toolResult] });
+      }
+      continue;
+    }
+
+    // Assistant con tool_calls → formato Anthropic tool_use
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+      const content = [];
+      if (msg.content) content.push({ type: 'text', text: msg.content });
+      for (const tc of msg.tool_calls) {
+        content.push({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.function.name,
+          input: typeof tc.function.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : (tc.function.arguments ?? {}),
+        });
+      }
+      converted.push({ role: 'assistant', content });
+      continue;
+    }
+
+    converted.push({ role: msg.role, content: msg.content ?? '' });
+  }
+
+  // Anthropic exige que el primer mensaje sea 'user'
+  let start = 0;
+  while (start < converted.length && converted[start].role !== 'user') start++;
+
+  return { system, messages: converted.slice(start) };
+}
+
+/**
+ * Convierte herramientas de formato OpenAI → Anthropic.
+ */
+function _convertirHerramientas(tools) {
+  return tools.map(t => ({
+    name: t.function.name,
+    description: t.function.description,
+    input_schema: t.function.parameters,
+  }));
+}
+
+/**
+ * Convierte respuesta Anthropic → formato OpenAI-compatible.
+ */
+function _convertirRespuesta(response) {
+  const textBlock   = response.content.find(b => b.type === 'text');
+  const toolBlocks  = response.content.filter(b => b.type === 'tool_use');
+
+  if (response.stop_reason === 'tool_use' && toolBlocks.length) {
+    return {
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: textBlock?.text ?? null,
+          tool_calls: toolBlocks.map(b => ({
+            id: b.id,
+            type: 'function',
+            function: { name: b.name, arguments: JSON.stringify(b.input) },
+          })),
+        },
+      }],
+    };
+  }
+
+  return {
+    choices: [{
+      finish_reason: 'stop',
+      message: {
+        role: 'assistant',
+        content: textBlock?.text ?? '',
+        tool_calls: [],
+      },
+    }],
+  };
+}
+
+// ─── Funciones exportadas (misma API que el módulo Groq anterior) ──────────────
+
+/**
+ * Genera una respuesta conversacional usando Claude.
  */
 export async function generarRespuesta(historial, mensajeUsuario, contextoUVA = null, nombreUsuario = null, uvaNombre = null) {
-  const messages = [{ role: 'system', content: buildSystemPrompt(nombreUsuario, uvaNombre) }];
+  const messages = [];
 
-  // Historial reciente — máx 20 turnos
-  const historialReciente = historial.slice(-20);
-  for (const turno of historialReciente) {
-    messages.push({ role: turno.rol, content: turno.mensaje });
+  for (const turno of historial.slice(-20)) {
+    messages.push({ role: turno.rol, content: turno.mensaje || '' });
   }
 
   let mensajeFinal = mensajeUsuario;
   if (contextoUVA) {
     mensajeFinal = `${mensajeUsuario}\n\n[CONTEXTO DE PROGRAMACIÓN OFICIAL — usar para responder]:\n${contextoUVA}`;
   }
-
   messages.push({ role: 'user', content: mensajeFinal });
 
-  const completion = await groq.chat.completions.create({
-    messages,
+  const response = await client.messages.create({
     model: MODEL,
-    temperature: 0.7,
+    system: buildSystemPrompt(nombreUsuario, uvaNombre),
+    messages,
     max_tokens: 1024,
-    top_p: 1,
-    stream: false,
+    temperature: 0.7,
   });
 
-  return completion.choices[0]?.message?.content || 'Lo siento, no pude generar una respuesta en este momento.';
+  return response.content[0]?.text || 'Lo siento, no pude generar una respuesta en este momento.';
 }
 
 /**
  * Extrae el nombre propio del usuario de un mensaje si se presenta.
- * @param {string} mensaje
- * @returns {Promise<string|null>}
  */
 export async function extraerNombreConIA(mensaje) {
-  const completion = await groq.chat.completions.create({
-    messages: [
-      {
-        role: 'system',
-        content: `Eres un extractor de nombres. Dado el mensaje de un usuario, responde ÚNICAMENTE con su nombre propio si se presentó (ej: "me llamo Carlos", "soy María", "mi nombre es Pedro"). Si no se presenta, responde exactamente: ninguno. Solo el nombre, sin puntuación ni texto extra.`,
-      },
-      { role: 'user', content: mensaje },
-    ],
+  const response = await client.messages.create({
     model: MODEL,
-    temperature: 0,
+    system: 'Eres un extractor de nombres. Dado el mensaje de un usuario, responde ÚNICAMENTE con su nombre propio si se presentó (ej: "me llamo Carlos", "soy María", "mi nombre es Pedro"). Si no se presenta, responde exactamente: ninguno. Solo el nombre, sin puntuación ni texto extra.',
+    messages: [{ role: 'user', content: mensaje }],
     max_tokens: 15,
+    temperature: 0,
   });
-  const r = completion.choices[0]?.message?.content?.trim();
+  const r = response.content[0]?.text?.trim();
   return r && r.toLowerCase() !== 'ninguno' && r.length < 30 ? r : null;
 }
 
 /**
- * Clasifica si un texto menciona un barrio/comuna de Medellín.
- * Usado por el chat-agent como fallback si el NER local falla.
- * @param {string} texto
- * @param {string[]} listaBarrios  — lista completa para contexto
- * @returns {Promise<string|null>}
+ * Extrae el barrio o comuna de Medellín mencionado en un texto.
  */
 export async function extraerBarrioConIA(texto, listaBarrios) {
   const muestra = listaBarrios.slice(0, 80).join(', ');
-
-  const completion = await groq.chat.completions.create({
-    messages: [
-      {
-        role: 'system',
-        content: `Eres un extractor de entidades. Dado un mensaje de un ciudadano de Medellín, 
-extrae únicamente el nombre del barrio o comuna que menciona. 
+  const response = await client.messages.create({
+    model: MODEL,
+    system: `Eres un extractor de entidades. Dado un mensaje de un ciudadano de Medellín,
+extrae únicamente el nombre del barrio o comuna que menciona.
 Responde SOLO con el nombre del barrio/comuna en minúsculas y sin tildes, o la palabra "ninguno" si no menciona ninguno.
 Ejemplos de barrios: ${muestra}`,
-      },
-      { role: 'user', content: texto },
-    ],
-    model: MODEL,
-    temperature: 0,
+    messages: [{ role: 'user', content: texto }],
     max_tokens: 20,
+    temperature: 0,
   });
-
-  const resultado = completion.choices[0]?.message?.content?.trim().toLowerCase();
+  const resultado = response.content[0]?.text?.trim().toLowerCase();
   return resultado === 'ninguno' || !resultado ? null : resultado;
 }
 
 /**
  * Expande keywords de búsqueda con sinónimos y términos relacionados.
- * Ej: "robótica" → ["robot", "tecnologia", "informatica", "digital", "programacion"]
- * @param {string[]} keywords  — palabras clave originales
- * @returns {Promise<string[]>}
  */
 export async function expandirKeywordsConIA(keywords) {
   const tema = keywords.join(', ');
-  const completion = await groq.chat.completions.create({
-    messages: [
-      {
-        role: 'system',
-        content: `Eres un asistente para un chatbot de actividades culturales en Medellín.
+  const response = await client.messages.create({
+    model: MODEL,
+    system: `Eres un asistente para un chatbot de actividades culturales en Medellín.
 Dado un tema de búsqueda, genera palabras clave relacionadas en español que podrían aparecer en nombres de talleres, cursos o actividades culturales, recreativas o formativas.
 Responde SOLO con un array JSON de strings en minúsculas y sin tildes. Máximo 10 palabras.
 Ejemplos:
 - "robotica" → ["robot","tecnologia","informatica","digital","programacion","stem","ciencia","computacion"]
 - "danza" → ["baile","folclor","urbana","movimiento","ritmo","coreografia"]
 - "cocina" → ["gastronomia","recetas","alimentacion","culinaria","hornear"]`,
-      },
-      { role: 'user', content: tema },
-    ],
-    model: 'llama-3.1-8b-instant',
-    temperature: 0.3,
+    messages: [{ role: 'user', content: tema }],
     max_tokens: 100,
+    temperature: 0.3,
   });
 
   try {
-    const raw = completion.choices[0]?.message?.content?.trim();
+    const raw = response.content[0]?.text?.trim();
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.map(k =>
-      String(k).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    ) : [];
+    return Array.isArray(arr)
+      ? arr.map(k => String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))
+      : [];
   } catch {
     return [];
   }
@@ -240,16 +327,41 @@ Ejemplos:
 
 /**
  * Clasifica la intención del mensaje del usuario.
- * Usa llama-3.1-8b-instant (rápido, barato) con temperature=0.
- * @param {string} mensaje
- * @returns {Promise<{intent: string, keywords: string[]}>}
  */
+export async function clasificarIntencion(mensaje) {
+  const response = await client.messages.create({
+    model: MODEL,
+    system: `Eres un clasificador de intenciones para un chatbot de WhatsApp sobre la Fundación EPM en Medellín (UVAs, Museo del Agua, Biblioteca EPM, Parque de los Deseos).
+
+Clasifica el mensaje en UNA intención. Responde SOLO con JSON válido, sin texto extra.
+
+Intenciones:
+- "reset": quiere reiniciar/empezar de cero la conversación
+- "enlace": pide el link/url/página oficial de programación
+- "cambio_uva": quiere consultar otro barrio, UVA o zona diferente a la suya
+- "tematica": busca un tipo de actividad en todas las UVAs (ej: robótica, danza, yoga, cocina)
+- "continuacion": mensaje corto de confirmación sin pregunta real (ok, gracias, sí, listo, perfecto)
+- "normal": cualquier otra cosa (saludo, consulta de agenda, pregunta por horarios, etc.)
+
+Para "tematica": extrae las palabras clave del tema (solo sustantivos/verbos del tema, sin stopwords).
+
+Formato: {"intent": "...", "keywords": [...]}`,
+    messages: [{ role: 'user', content: mensaje }],
+    max_tokens: 80,
+    temperature: 0,
+  });
+
+  const raw = response.content[0]?.text?.trim();
+  const parsed = JSON.parse(raw);
+  return { intent: parsed.intent || 'normal', keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [] };
+}
+
 /**
  * System prompt optimizado para modo tool use.
  */
 export function buildSystemPromptTools(nombreUsuario, uvaNombre, hoy) {
   const ctxNombre = nombreUsuario ? `El nombre del usuario es *${nombreUsuario}*.` : '';
-  const ctxUva    = uvaNombre    ? `La UVA del usuario es *${uvaNombre}*.`         : '';
+  const ctxUva    = uvaNombre    ? `La UVA del usuario es *${uvaNombre}*. Úsala por defecto al llamar herramientas.` : '';
 
   return `Eres el asistente virtual de la Fundación EPM en Medellín. Ayudas a ciudadanos a encontrar actividades en las UVAs (14 en Medellín, Bello e Itagüí), el Museo del Agua, la Biblioteca EPM y el Parque de los Deseos.
 
@@ -275,51 +387,25 @@ Emojis por tipo: 💃 danza | 🎵 música | 🎨 arte | ⚽ deporte | 🎭 teat
 }
 
 /**
- * Llama a Groq con herramientas (function calling).
- * Retorna la respuesta raw para que el llamador maneje el loop de tool calls.
+ * Llama a Claude con herramientas (function calling).
+ * Acepta mensajes y herramientas en formato OpenAI y devuelve respuesta estilo OpenAI.
+ * Permite que chat-agent.js funcione sin modificaciones.
  */
-export async function llamadaConHerramientas(messages, tools) {
-  return groq.chat.completions.create({
-    messages,
+export async function llamadaConHerramientas(openaiMessages, openaiTools) {
+  const { system, messages } = _convertirMensajes(openaiMessages);
+  const tools = _convertirHerramientas(openaiTools);
+
+  const response = await client.messages.create({
     model: MODEL,
+    system: system || undefined,
+    messages,
     tools,
-    tool_choice: 'auto',
+    tool_choice: { type: 'auto' },
     temperature: 0.7,
-    max_tokens: 1024,
-    stream: false,
-  });
-}
-export async function clasificarIntencion(mensaje) {
-  const completion = await groq.chat.completions.create({
-    messages: [
-      {
-        role: 'system',
-        content: `Eres un clasificador de intenciones para un chatbot de WhatsApp sobre la Fundación EPM en Medellín (UVAs, Museo del Agua, Biblioteca EPM, Parque de los Deseos).
-
-Clasifica el mensaje en UNA intención. Responde SOLO con JSON válido, sin texto extra.
-
-Intenciones:
-- "reset": quiere reiniciar/empezar de cero la conversación
-- "enlace": pide el link/url/página oficial de programación
-- "cambio_uva": quiere consultar otro barrio, UVA o zona diferente a la suya
-- "tematica": busca un tipo de actividad en todas las UVAs (ej: robótica, danza, yoga, cocina)
-- "continuacion": mensaje corto de confirmación sin pregunta real (ok, gracias, sí, listo, perfecto)
-- "normal": cualquier otra cosa (saludo, consulta de agenda, pregunta por horarios, etc.)
-
-Para "tematica": extrae las palabras clave del tema (solo sustantivos/verbos del tema, sin stopwords).
-
-Formato: {"intent": "...", "keywords": [...]}`,
-      },
-      { role: 'user', content: mensaje },
-    ],
-    model: 'llama-3.1-8b-instant',
-    temperature: 0,
-    max_tokens: 80,
+    max_tokens: 1500,
   });
 
-  const raw = completion.choices[0]?.message?.content?.trim();
-  const parsed = JSON.parse(raw);
-  return { intent: parsed.intent || 'normal', keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [] };
+  return _convertirRespuesta(response);
 }
 
-export default groq;
+export default client;
