@@ -1,8 +1,11 @@
 /**
  * session-store.js
  *
- * Reemplaza el auth_info_multi_file de Baileys por almacenamiento en Supabase.
- * Permite que Railway reinicie el contenedor sin perder la sesión de WhatsApp.
+ * Almacena las credenciales de Baileys en Supabase.
+ * - creds se guardan INMEDIATAMENTE cuando cambian (inicio de sesión, rotación de keys)
+ * - keys se guardan con DEBOUNCE de 3s para no saturar Supabase con cada mensaje
+ *
+ * Esto permite que Railway reinicie el contenedor sin perder la sesión de WhatsApp.
  */
 
 import { initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
@@ -10,26 +13,28 @@ import { supabase } from '../services/supabase.js';
 
 const SESSION_ID = 'default';
 
-/**
- * Carga o crea el estado de autenticación de Baileys desde Supabase.
- */
 export async function useSupabaseAuthState() {
+  // ─── Cargar sesión existente desde Supabase ─────────────────────────────────
   const { data } = await supabase
     .from('whatsapp_sessions')
     .select('creds, keys')
     .eq('id', SESSION_ID)
     .single();
 
-  // Si no hay sesión guardada, inicializar con credenciales vacías de Baileys
   let creds = data?.creds
     ? JSON.parse(JSON.stringify(data.creds), BufferJSON.reviver)
     : initAuthCreds();
 
-  // Revivir todos los Buffers almacenados en las claves al cargarlas
-  let keysRaw = data?.keys || {};
-  let keys = JSON.parse(JSON.stringify(keysRaw), BufferJSON.reviver);
+  let keys = JSON.parse(JSON.stringify(data?.keys || {}), BufferJSON.reviver);
 
-  const saveToSupabase = async () => {
+  // ─── Guardado en Supabase ────────────────────────────────────────────────────
+
+  let saveTimer  = null;
+  let guardando  = false;
+
+  async function _flush() {
+    if (guardando) return;
+    guardando = true;
     try {
       await supabase
         .from('whatsapp_sessions')
@@ -37,20 +42,33 @@ export async function useSupabaseAuthState() {
           {
             id: SESSION_ID,
             creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),
-            keys: JSON.parse(JSON.stringify(keys, BufferJSON.replacer)),
+            keys:  JSON.parse(JSON.stringify(keys,  BufferJSON.replacer)),
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'id' }
         );
-      console.log('[Session] Sesión guardada en Supabase ✓');
     } catch (err) {
-      console.error('[Session] Error guardando sesión:', err.message);
+      console.error('[Session] Error guardando en Supabase:', err.message);
+    } finally {
+      guardando = false;
     }
+  }
+
+  // Guarda creds inmediatamente (cambio crítico: inicio de sesión, rotación de clave)
+  const saveCreds = async () => {
+    console.log('[Session] 🔐 Guardando credenciales...');
+    clearTimeout(saveTimer);
+    await _flush();
+    console.log('[Session] ✓ Credenciales guardadas');
   };
 
-  const saveCreds = async () => {
-    await saveToSupabase();
-  };
+  // Guarda keys con debounce de 3s (ocurre en cada mensaje — no hay que saturar Supabase)
+  function _scheduleKeySave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => _flush().catch(() => {}), 3000);
+  }
+
+  // ─── State de Baileys ────────────────────────────────────────────────────────
 
   const state = {
     creds,
@@ -59,10 +77,7 @@ export async function useSupabaseAuthState() {
         const result = {};
         for (const id of ids) {
           const val = keys[`${type}-${id}`];
-          // val ya está revivido en memoria desde la carga inicial
-          if (val !== undefined && val !== null) {
-            result[id] = val;
-          }
+          if (val !== undefined && val !== null) result[id] = val;
         }
         return result;
       },
@@ -71,14 +86,13 @@ export async function useSupabaseAuthState() {
           for (const [id, value] of Object.entries(typeData || {})) {
             const key = `${type}-${id}`;
             if (value !== undefined && value !== null) {
-              // Guardar en memoria como objeto nativo (Buffer real)
               keys[key] = value;
             } else {
               delete keys[key];
             }
           }
         }
-        await saveToSupabase();
+        _scheduleKeySave(); // debounced — no bloquea ni satura Supabase
       },
     },
   };

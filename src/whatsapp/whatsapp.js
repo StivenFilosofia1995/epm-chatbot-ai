@@ -2,9 +2,9 @@
  * whatsapp.js
  *
  * Núcleo de la conexión WhatsApp con Baileys.
- * - Muestra QR en terminal la primera vez
- * - Reconecta automáticamente si se cae
+ * - Reconexión INFINITA con backoff exponencial (cap 60s) — nunca se rinde
  * - Guarda sesión en Supabase (no necesita QR al reiniciar)
+ * - Watchdog cada 5 min: fuerza reconexión si el socket está muerto
  */
 
 import {
@@ -21,47 +21,67 @@ import { useSupabaseAuthState, deleteSession } from './session-store.js';
 
 const logger = pino({ level: 'silent' });
 
-// Evitar que errores no capturados maten el proceso — mostrarlos en su lugar
+// ─── Estado global ────────────────────────────────────────────────────────────
+
+let sock            = null;
+let reconectando    = false;   // guard: evita inicios simultáneos
+let intentos        = 0;       // contador de reintentos consecutivos
+let esperandoQR     = false;
+let qrEscaneado     = false;
+let ultimoQR        = null;
+let ultimoQRTs      = null;
+
+const BACKOFF_MAX_MS = 60_000; // máximo 60s entre reintentos
+
+// ─── Handlers globales de errores no capturados ───────────────────────────────
+
 process.on('unhandledRejection', (reason) => {
-  console.error('[WA] ⚠ Error no capturado (promise):', reason?.message || reason);
+  console.error('[WA] ⚠ Promise no capturada:', reason?.message || reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('[WA] ⚠ Error no capturado (excepción):', err.message);
+  console.error('[WA] ⚠ Excepción no capturada:', err.message);
+  // No hacer process.exit — Railway ya monitorea el proceso
 });
 
-let sock = null;
-let intentosReconexion = 0;
-const MAX_INTENTOS = 5;
-let esperandoQR = false;   // true mientras se muestra el QR sin escanear
-let qrEscaneado  = false;  // true cuando creds.update disparó durante el QR (QR sí fue escaneado)
-let ultimoQR = null;
-let ultimoQRTs = null;
+// ─── API pública ──────────────────────────────────────────────────────────────
 
-/**
- * Retorna la instancia activa del socket de Baileys.
- * Usada por api.js para enviar mensajes.
- */
-export function getSock() {
-  return sock;
+export function getSock()        { return sock; }
+export function getLastQRInfo()  { return { qr: ultimoQR, generado_en: ultimoQRTs, esperando_qr: esperandoQR }; }
+
+// ─── Reconexión con backoff ───────────────────────────────────────────────────
+
+function _programarReconexion(delayMs) {
+  if (reconectando) return; // ya hay una en curso
+  reconectando = true;
+  intentos++;
+
+  const espera = Math.min(Math.max(delayMs, 1000 * Math.pow(2, Math.min(intentos - 1, 6))), BACKOFF_MAX_MS);
+  console.log(`[WA] 🔄 Reconectando en ${(espera / 1000).toFixed(0)}s (intento ${intentos})...`);
+
+  setTimeout(async () => {
+    reconectando = false;
+    await iniciarWhatsApp();
+  }, espera);
 }
 
-export function getLastQRInfo() {
-  return {
-    qr: ultimoQR,
-    generado_en: ultimoQRTs,
-    esperando_qr: esperandoQR,
-  };
-}
+// ─── Watchdog: verifica cada 5 min que el socket siga vivo ───────────────────
 
-/**
- * Inicia la conexión a WhatsApp.
- */
+setInterval(() => {
+  const conectado = !!sock?.user;
+  if (!conectado && !reconectando && !esperandoQR) {
+    console.warn('[WA] 🐕 Watchdog: socket no conectado — forzando reconexión...');
+    _programarReconexion(3000);
+  }
+}, 5 * 60 * 1000);
+
+// ─── Inicio de la conexión ────────────────────────────────────────────────────
+
 export async function iniciarWhatsApp() {
   console.log('[WA] 🔌 Iniciando conexión a WhatsApp...');
 
   const { state, saveCreds } = await useSupabaseAuthState();
   const { version } = await fetchLatestBaileysVersion();
-  console.log(`[WA] Usando Baileys v${version.join('.')}`);
+  console.log(`[WA] Baileys v${version.join('.')}`);
 
   sock = makeWASocket({
     version,
@@ -74,9 +94,11 @@ export async function iniciarWhatsApp() {
     browser: ['UVA Medellín Bot', 'Chrome', '1.0.0'],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    // Keepalive: ping WhatsApp cada 25s para mantener la conexión activa
+    keepAliveIntervalMs: 25_000,
   });
 
-  // ─── Evento: actualización de credenciales ──────────────────────────────
+  // ─── creds.update ──────────────────────────────────────────────────────────
   sock.ev.on('creds.update', () => {
     if (esperandoQR) {
       qrEscaneado = true;
@@ -85,75 +107,82 @@ export async function iniciarWhatsApp() {
     saveCreds();
   });
 
-  // ─── Evento: QR / conexión ──────────────────────────────────────────────
+  // ─── connection.update ─────────────────────────────────────────────────────
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
+    // QR nuevo disponible
     if (qr) {
-      esperandoQR = true;
+      esperandoQR  = true;
       qrEscaneado  = false;
-      ultimoQR = qr;
-      ultimoQRTs = new Date().toISOString();
+      ultimoQR     = qr;
+      ultimoQRTs   = new Date().toISOString();
       console.log('\n[WA] 📱 Escanea este QR con WhatsApp Business:\n');
       qrcode.generate(qr, { small: true });
       console.log('\n[WA] El QR expira en ~60 s. Si vence, se genera uno nuevo automáticamente.\n');
     }
 
+    // Conexión exitosa
     if (connection === 'open') {
-      esperandoQR  = false;
-      qrEscaneado  = false;
-      ultimoQR = null;
-      intentosReconexion = 0;
-      console.log('[WA] ✅ Conectado a WhatsApp exitosamente!');
+      esperandoQR = false;
+      qrEscaneado = false;
+      ultimoQR    = null;
+      intentos    = 0; // resetear contador en conexión exitosa
+      console.log('[WA] ✅ Conectado a WhatsApp!');
       console.log(`[WA] Número: ${sock.user?.id?.split(':')[0]}`);
     }
 
+    // Conexión cerrada
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
+      console.log(`[WA] 🔌 Conexión cerrada. Código: ${statusCode || 'desconocido'}`);
 
-      // QR fue escaneado → los archivos ya se guardaron (saveCreds es síncrono en archivos)
-      // Simplemente reconectar: la nueva sesión cargará los archivos actualizados
+      // QR escaneado con éxito → reconectar para cargar la sesión nueva
       if (qrEscaneado) {
         esperandoQR = false;
-        qrEscaneado  = false;
-        console.log('[WA] 🔐 Pairing completo. Iniciando sesión autenticada...');
+        qrEscaneado = false;
+        intentos    = 0;
+        console.log('[WA] 🔐 Pairing completo. Cargando sesión autenticada...');
         setTimeout(iniciarWhatsApp, 1500);
         return;
       }
 
-      // QR mostrado pero NO escaneado → expiró, generar nuevo QR
+      // QR mostrado pero expiró sin escanear → generar nuevo QR
       if (esperandoQR) {
         esperandoQR = false;
-        console.log('[WA] ⏱ QR expirado sin escanear. Generando nuevo QR...');
+        console.log('[WA] ⏱ QR expirado. Generando nuevo QR...');
         setTimeout(iniciarWhatsApp, 2000);
         return;
       }
 
-      // Sesión rechazada por WhatsApp → borrar sesión en Supabase y pedir QR nuevo
-      if (statusCode === DisconnectReason.loggedOut) {
-        console.log('[WA] ⚠ Sesión cerrada. Generando nuevo QR...');
-        intentosReconexion = 0;
-        await deleteSession();
+      // Sesión revocada por WhatsApp → borrar y pedir nuevo QR
+      if (
+        statusCode === DisconnectReason.loggedOut ||
+        statusCode === DisconnectReason.multideviceMismatch
+      ) {
+        console.log('[WA] ⚠ Sesión revocada. Eliminando sesión y generando nuevo QR...');
+        intentos = 0;
+        await deleteSession().catch(() => {});
         setTimeout(iniciarWhatsApp, 2000);
         return;
       }
 
-      // Caída de conexión post-autenticación — reintentar con backoff
-      if (intentosReconexion < MAX_INTENTOS) {
-        intentosReconexion++;
-        const espera = Math.min(1000 * Math.pow(2, intentosReconexion), 30000);
-        console.log(`[WA] 🔄 Reconectando en ${espera / 1000}s (intento ${intentosReconexion}/${MAX_INTENTOS})...`);
-        setTimeout(iniciarWhatsApp, espera);
-      } else {
-        console.error('[WA] ❌ Máximo de reintentos alcanzado. Reinicia el servidor manualmente.');
+      // Restart requerido por Baileys (sin borrar sesión)
+      if (statusCode === DisconnectReason.restartRequired) {
+        console.log('[WA] ♻ Restart requerido por Baileys...');
+        intentos = 0;
+        setTimeout(iniciarWhatsApp, 1000);
+        return;
       }
+
+      // Cualquier otro cierre → reconexión automática con backoff infinito
+      _programarReconexion(2000);
     }
   });
 
-  // ─── Evento: mensaje entrante ────────────────────────────────────────────
+  // ─── Mensajes entrantes ────────────────────────────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
-
     for (const msg of messages) {
       try {
         await procesarMensajeWhatsApp(sock, msg);
