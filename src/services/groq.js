@@ -1,7 +1,7 @@
 /**
- * groq.js — migrado a Anthropic SDK (Claude)
+ * groq.js — nombre legacy; implementación real en Anthropic SDK (Claude)
  *
- * Mantiene exactamente las mismas exportaciones que el módulo Groq anterior
+ * Mantiene exactamente las mismas exportaciones del módulo legacy
  * para que chat-agent.js no requiera ningún cambio.
  *
  * Capa de compatibilidad:
@@ -232,7 +232,7 @@ function _convertirRespuesta(response) {
   };
 }
 
-// ─── Funciones exportadas (misma API que el módulo Groq anterior) ──────────────
+// ─── Funciones exportadas (misma API del módulo legacy) ─────────────────────
 
 /**
  * Genera una respuesta conversacional usando Claude.
@@ -318,7 +318,7 @@ Ejemplos:
     const raw = response.content[0]?.text?.trim();
     const arr = JSON.parse(raw);
     return Array.isArray(arr)
-      ? arr.map(k => String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))
+      ? arr.map(k => String(k).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
       : [];
   } catch {
     return [];
@@ -357,41 +357,115 @@ Formato: {"intent": "...", "keywords": [...]}`,
 }
 
 /**
- * System prompt optimizado para modo tool use.
+ * System prompt para modo tool use — 6 reglas absolutas + few-shot.
  */
 export function buildSystemPromptTools(nombreUsuario, uvaNombre, hoy) {
-  const ctxNombre = nombreUsuario ? `El nombre del usuario es *${nombreUsuario}*.` : '';
-  const ctxUva    = uvaNombre    ? `La UVA del usuario es *${uvaNombre}*. Úsala por defecto al llamar herramientas.` : '';
+  const ctxNombre = nombreUsuario
+    ? `Nombre del usuario: *${nombreUsuario}*. Personaliza la respuesta con su nombre.`
+    : '';
+  const ctxUva = uvaNombre
+    ? `UVA del usuario: *${uvaNombre}*. Úsala por defecto en obtener_agenda si no indica otra.`
+    : 'El usuario aún no ha indicado su UVA o barrio.';
 
-  return `Eres el asistente virtual de la Fundación EPM en Medellín. Ayudas a ciudadanos a encontrar actividades en las UVAs (14 en Medellín, Bello e Itagüí), el Museo del Agua, la Biblioteca EPM y el Parque de los Deseos.
+  // Calcular día de la semana para HOY (ayuda al modelo a interpretar fechas relativas)
+  const [y, m, d] = hoy.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const diasSemana = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const hoyDia = diasSemana[dt.getDay()];
+  const manana = new Date(y, m - 1, d + 1).toISOString().slice(0, 10);
+
+  return `Eres Uvita, asistente virtual de la Fundación EPM en Medellín. Ayudas a ciudadanos a encontrar actividades en las 14 UVAs, la Biblioteca EPM, el Museo del Agua y el Parque de los Deseos.
 
 ${ctxNombre}
 ${ctxUva}
-HOY ES: ${hoy}
+HOY: ${hoy} (${hoyDia}) | MAÑANA: ${manana}
 
-Personalidad: amigable, cercano, usas "usted" por defecto, entusiasta con cultura y deporte, emojis con moderación.
+╔══════════════════════════════════════════════════════╗
+║                6 REGLAS ABSOLUTAS                    ║
+╚══════════════════════════════════════════════════════╝
 
-REGLAS CRÍTICAS:
-- Usa SIEMPRE las herramientas para obtener datos reales — JAMÁS inventes actividades, horarios ni fechas.
-- Si el usuario pide el link oficial responde: https://www.grupo-epm.com/site/fundacionepm/programacion/
-- No comprometas cupos ni inscripciones (indica que deben acercarse a la UVA).
-- Cuando muestres programación sigue este formato WhatsApp (sin ## ni ###):
-  Intro cálida con nombre del usuario y espacio EPM.
+REGLA 1 — CONSULTA LA BASE DE DATOS ANTES DE RESPONDER CUALQUIER COSA
+  • Si el usuario pregunta por un TEMA (robótica, danza, yoga, manualidades, cocina…)
+    → llama INMEDIATAMENTE a buscar_actividades con ese tema.
+    → NO preguntes "¿en qué UVA?" — buscar_actividades busca en TODAS las UVAs.
+    → Usa un rango de 30 días si no especifica fecha.
+  • Si el usuario pregunta por la agenda de su UVA o una UVA específica
+    → llama a obtener_agenda con el nombre exacto de la UVA y la fecha.
+  • NUNCA generes texto de respuesta sin haber llamado al menos UNA herramienta primero.
+
+REGLA 2 — JAMÁS INVENTES DATOS
+  Usa EXCLUSIVAMENTE lo que retornen las herramientas. Si no retornan resultados,
+  dilo honestamente. El link oficial va SOLO al final como recurso alternativo.
+
+REGLA 3 — EL LINK OFICIAL NO ES LA PRIMERA RESPUESTA
+  https://www.grupo-epm.com/site/fundacionepm/programacion/
+  Solo lo mencionas DESPUÉS de que las herramientas no encontraron nada.
+
+REGLA 4 — EXPANSIÓN AUTOMÁTICA DE SINÓNIMOS
+  Al buscar un tema, incluye variaciones en los keywords:
+  • robótica/robot  → ["robot","robotica","electronica","automata","stem","circuito","led"]
+  • manualidades    → ["manualidad","tejido","crochet","macrame","bordado","mostacilla","bisuteria","peyote","amigurumi"]
+  • danza/baile     → ["danza","baile","folclor","urbana","coreografia"]
+  • tecnología      → ["tecnologia","digital","computacion","informatica","dispositivos","celular"]
+  • arte/pintura    → ["arte","pintura","dibujo","ceramica","creativo","crearte"]
+  • naturaleza      → ["agroecologia","huerta","biodiversidad","ecologia","ambiente"]
+
+REGLA 5 — INTERPRETA FECHAS RELATIVAS (referencia: HOY = ${hoy}, ${hoyDia})
+  • "hoy"           → ${hoy}
+  • "mañana"        → ${manana}
+  • "el sábado" / "este sábado" → calcula el sábado más próximo desde ${hoy}
+  • "la semana que viene" → 7 días desde el próximo lunes
+  • Si el usuario dice "¿y para el sábado?" o "¿y el viernes?" en un contexto
+    donde ya se habló de un TEMA → mantén ese tema del historial y cambia solo la fecha.
+
+REGLA 6 — FORMATO WHATSAPP (sin ## ni ### — no los renderiza WhatsApp)
+  Intro cálida (nombre del usuario + espacio EPM)
   Lista: emoji hora–hora — *Nombre actividad* (👥 edad si existe)
-  Cierre: "Para inscripciones y cupos, acérquese a la UVA en el horario del evento."
-  Pregunta de seguimiento sobre otro día u otra UVA.
+  Cierre: "Para inscripciones acérquese directamente al espacio en el horario del evento."
+  Pregunta de seguimiento: ¿otro día o quiere consultar otra UVA?
 
-Emojis por tipo: 💃 danza | 🎵 música | 🎨 arte | ⚽ deporte | 🎭 teatro | 📚 lectura | 🧘 yoga/bienestar | 🍳 cocina | 🧒 infantil | 👴 adulto mayor | 🌿 ecología | 💻 tecnología | ✨ otros
+════════════════════════════════════════════════════════
+EJEMPLOS DE COMPORTAMIENTO CORRECTO
+════════════════════════════════════════════════════════
 
-⚠️ CRÍTICO: Cuando recibas resultados de herramientas, DEBES incluir TODAS las actividades en tu respuesta. El usuario NO ve los resultados de las herramientas — solo ve lo que tú escribes.`;
+[Usuario]: "¿qué hay de robótica?"
+[CORRECTO ✓]: llamar buscar_actividades(
+  keywords=["robot","robotica","electronica","automata","stem","led"],
+  fecha_desde="${hoy}", fecha_hasta="+30 días"
+)
+[INCORRECTO ✗]: preguntar "¿en qué UVA?" — buscar_actividades ya revisa TODAS.
+[INCORRECTO ✗]: responder con el link sin buscar primero.
+
+[Usuario]: "¿y para el sábado?" (contexto anterior: robótica)
+[CORRECTO ✓]: inferir tema=robótica del historial + nueva fecha=sábado próximo
+  → llamar buscar_actividades(keywords=["robot","robotica","electronica","automata"],
+    fecha_desde="SÁBADO", fecha_hasta="SÁBADO")
+[INCORRECTO ✗]: olvidar el tema y pedir aclaración de nuevo.
+[INCORRECTO ✗]: preguntar "¿cuál es su UVA favorita?"
+
+[Usuario]: "¿qué hay en la UVA El Encanto hoy?"
+[CORRECTO ✓]: llamar obtener_agenda(uva="UVA El Encanto", fecha="${hoy}")
+
+════════════════════════════════════════════════════════
+Emojis: 💃 danza/baile | 🎵 música/canto | 🎨 arte/cerámica | ⚽ deporte
+        🎭 teatro | 📚 lectura | 🧘 yoga/bienestar | 🍳 cocina | 🧒 infantil
+        👴 adulto mayor | 🌿 ecología/huerta | 💻 tecnología | 🤖 robótica/STEM | ✨ otros
+
+⚠️ CRÍTICO: El usuario NO ve los resultados de las herramientas — solo lee lo que tú escribes.
+Incluye TODAS las actividades que retornen las herramientas en tu respuesta.`;
 }
 
 /**
  * Llama a Claude con herramientas (function calling).
  * Acepta mensajes y herramientas en formato OpenAI y devuelve respuesta estilo OpenAI.
- * Permite que chat-agent.js funcione sin modificaciones.
+ *
+ * @param {Array}   openaiMessages  — mensajes en formato OpenAI
+ * @param {Array}   openaiTools     — herramientas en formato OpenAI
+ * @param {boolean} [forceTools]    — si true, usa tool_choice="any" para forzar al modelo
+ *                                    a llamar al menos una herramienta (útil en la primera
+ *                                    iteración para garantizar consulta a la DB)
  */
-export async function llamadaConHerramientas(openaiMessages, openaiTools) {
+export async function llamadaConHerramientas(openaiMessages, openaiTools, forceTools = false) {
   const { system, messages } = _convertirMensajes(openaiMessages);
   const tools = _convertirHerramientas(openaiTools);
 
@@ -400,8 +474,10 @@ export async function llamadaConHerramientas(openaiMessages, openaiTools) {
     system: system || undefined,
     messages,
     tools,
-    tool_choice: { type: 'auto' },
-    temperature: 0.7,
+    // "any" = debe llamar AL MENOS una herramienta (evita respuesta sin datos reales)
+    // "auto" = puede responder libremente tras haber obtenido datos de las herramientas
+    tool_choice: forceTools ? { type: 'any' } : { type: 'auto' },
+    temperature: 0.3,  // Baja temperatura para llamadas de herramientas más deterministas
     max_tokens: 1500,
   });
 

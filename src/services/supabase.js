@@ -139,6 +139,36 @@ export async function getProgramacionPorFechas(fechas = []) {
 export async function buscarActividadesPorTema(keywords, fechaDesde, fechaHasta, recintos = null) {
   if (!keywords?.length) return [];
 
+  const normalizar = (s) => String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  const SINONIMOS = {
+    robotica: ['robot', 'robotica', 'electronica', 'automata', 'stem', 'circuito', 'led'],
+    robot: ['robot', 'robotica', 'electronica', 'automata', 'stem', 'circuito'],
+    danza: ['danza', 'baile', 'folclor', 'coreografia', 'ritmo', 'urbana'],
+    baile: ['baile', 'danza', 'folclor', 'coreografia', 'ritmo'],
+    tecnologia: ['tecnologia', 'digital', 'computacion', 'informatica', 'programacion', 'electronica'],
+    arte: ['arte', 'pintura', 'dibujo', 'ceramica', 'creativo', 'manualidad'],
+    manualidades: ['manualidad', 'tejido', 'crochet', 'macrame', 'bordado', 'mostacilla', 'bisuteria', 'amigurumi'],
+    naturaleza: ['agroecologia', 'huerta', 'biodiversidad', 'ecologia', 'ambiente', 'plantas'],
+    yoga: ['yoga', 'meditacion', 'bienestar', 'relajacion', 'respiracion'],
+    cocina: ['cocina', 'gastronomia', 'culinaria', 'recetas', 'alimentacion'],
+  };
+
+  const expandidas = new Set();
+  for (const kw of keywords) {
+    const n = normalizar(kw);
+    if (!n) continue;
+    expandidas.add(n);
+    (SINONIMOS[n] || []).forEach((s) => expandidas.add(normalizar(s)));
+    if (n.length >= 6) expandidas.add(n.slice(0, Math.max(5, n.length - 2)));
+  }
+  const terms = [...expandidas];
+  if (!terms.length) return [];
+
   let query = supabase
     .from('programacion_uva')
     .select('uva_nombre,fecha,hora_inicio,hora_fin,actividad,descripcion,edad_recomendada')
@@ -158,10 +188,14 @@ export async function buscarActividadesPorTema(keywords, fechaDesde, fechaHasta,
   if (error || !data) return [];
 
   return data.filter((row) => {
-    const texto = `${row.actividad || ''} ${row.descripcion || ''}`
-      .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    return keywords.some((kw) => texto.includes(kw));
+    const texto = normalizar(`${row.actividad || ''} ${row.descripcion || ''}`);
+    const tokens = texto.split(/[^a-z0-9]+/).filter(Boolean);
+
+    return terms.some((kw) => {
+      if (texto.includes(kw)) return true;
+      if (kw.length < 4) return false;
+      return tokens.some((tk) => tk.startsWith(kw) || (tk.length >= 6 && kw.startsWith(tk)));
+    });
   });
 }
 

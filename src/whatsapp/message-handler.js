@@ -5,7 +5,7 @@
  * Integra la capa Baileys con el chat-agent.js del sistema UVA Medellín:
  *   1. Filtra mensajes irrelevantes (grupos, estados, propios)
  *   2. Verifica si el bot debe responder (o hay un humano atendiendo)
- *   3. Delega al chat-agent.js (barrio → UVA → programación → Groq)
+ *   3. Delega al chat-agent.js (barrio → UVA → programación → Claude)
  *   4. Envía la respuesta por WhatsApp y guarda el registro del contacto
  */
 

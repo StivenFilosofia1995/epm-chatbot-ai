@@ -1,12 +1,12 @@
 /**
  * chat-agent.js — arquitectura LLM-first
  *
- * El LLM (Groq) es el cerebro: clasifica intenciones, extrae entidades,
+ * El LLM (Claude) es el cerebro: clasifica intenciones, extrae entidades,
  * razona sobre el contexto y genera respuestas naturales.
  * Este archivo solo hace tres cosas:
  *   1. Gestionar la sesión (quién es el usuario, a qué UVA pertenece)
  *   2. Consultar la DB con los parámetros correctos
- *   3. Pasarle el contexto a Groq y devolver su respuesta
+ *   3. Pasarle el contexto a Claude y devolver su respuesta
  */
 
 import {
@@ -138,7 +138,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     limpiarHistorialSesion(sessionId).catch(() => {});
   }
 
-  // ── 1. Clasificar intención con Groq ──────────────────────────────────────
+  // ── 1. Clasificar intención con Claude ────────────────────────────────────
   let intent = 'normal';
   let intentKeywords = [];
   try {
@@ -174,7 +174,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     return { respuesta, uva: null, barrio: null, fecha: hoyISO() };
   }
 
-  // ── 4. Extraer nombre si no se conoce (Groq) ─────────────────────────────
+  // ── 4. Extraer nombre si no se conoce (Claude) ───────────────────────────
   if (!session.nombre) {
     const nombre = await extraerNombreConIA(mensaje).catch(() => null);
     if (nombre) { session.nombre = nombre; setSession(sessionId, { nombre }); log(`Nombre: ${nombre}`); }
@@ -189,7 +189,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
       const uvaDirect = _resolverUVADesdeTexto(mensaje);
       if (uvaDirect) { barrio = uvaDirect; }
     }
-    // Intento 3: Groq extrae el barrio si los métodos locales fallan
+    // Intento 3: Claude extrae el barrio si los métodos locales fallan
     if (!barrio) {
       barrio = await extraerBarrioConIA(mensaje, Object.keys(BARRIOS_FLAT)).catch(() => null);
     }
@@ -203,7 +203,7 @@ export async function procesarMensaje({ sessionId, mensaje }) {
     }
   }
 
-  // ── 6. Groq con herramientas — consulta Supabase y genera respuesta ─────────
+  // ── 6. Claude con herramientas — consulta Supabase y genera respuesta ─────
   const historialDB = await getHistorialSesion(sessionId, 25).catch(() => []);
   const historial = [...session.historial, ...historialDB].slice(-25);
 
@@ -219,6 +219,64 @@ export async function procesarMensaje({ sessionId, mensaje }) {
   _guardarHistorialAsync(sessionId, mensaje, respuesta, session.barrio, session.uva);
   _actualizarVentanaContexto(sessionId, session, mensaje, respuesta);
   return { respuesta, uva: session.uva, barrio: session.barrio, fecha: hoyISO() };
+}
+
+// ─── Mapa de sinónimos temáticos ─────────────────────────────────────────────
+
+const SINONIMOS_TEMATICOS = {
+  'robotica':        ['robot', 'robotica', 'electronica', 'automata', 'stem', 'led', 'circuito', 'mecanica', 'tecnologia'],
+  'robot':           ['robot', 'robotica', 'electronica', 'automata', 'stem', 'circuito'],
+  'tecnologia':      ['tecnologia', 'digital', 'computacion', 'informatica', 'dispositivos', 'celular', 'movil', 'programacion'],
+  'informatica':     ['informatica', 'computacion', 'digital', 'programacion', 'tecnologia'],
+  'digital':         ['digital', 'tecnologia', 'computacion', 'celular', 'dispositivos', 'movil'],
+  'computacion':     ['computacion', 'informatica', 'digital', 'programacion'],
+  'danza':           ['danza', 'baile', 'folclor', 'urbana', 'coreografia', 'movimiento'],
+  'baile':           ['baile', 'danza', 'folclor', 'urbana', 'salsa', 'ritmo'],
+  'yoga':            ['yoga', 'meditacion', 'bienestar', 'pilates', 'relajacion', 'bien-estar'],
+  'bienestar':       ['bienestar', 'yoga', 'meditacion', 'salud', 'bien-estar'],
+  'cocina':          ['cocina', 'gastronomia', 'culinaria', 'recetas', 'hornear', 'alimentacion', 'saludable'],
+  'gastronomia':     ['gastronomia', 'cocina', 'culinaria', 'recetas', 'alimentacion'],
+  'arte':            ['arte', 'pintura', 'dibujo', 'ceramica', 'creativo', 'crearte', 'plastica', 'artesanal'],
+  'pintura':         ['pintura', 'dibujo', 'arte', 'acuarela', 'pastel', 'ceramica'],
+  'manualidades':    ['manualidad', 'tejido', 'crochet', 'macrame', 'bordado', 'artesanal', 'mostacilla', 'bisuteria', 'peyote', 'amigurumi', 'muñequeria'],
+  'tejido':          ['tejido', 'crochet', 'macrame', 'bordado', 'hilo', 'aguja', 'tejer', 'lana', 'ganchillo'],
+  'crochet':         ['crochet', 'tejido', 'macrame', 'hilo', 'lana', 'amigurumi', 'ganchillo'],
+  'macrame':         ['macrame', 'tejido', 'hilo', 'crochet', 'nudos'],
+  'bordado':         ['bordado', 'tejido', 'hilo', 'tela', 'canvas'],
+  'musica':          ['musica', 'canto', 'coro', 'guitarra', 'piano', 'banda', 'percusion', 'instrumento'],
+  'teatro':          ['teatro', 'drama', 'actuacion', 'escena', 'dramatizacion'],
+  'lectura':         ['lectura', 'libro', 'cuento', 'literatura', 'cuentos'],
+  'agroecologia':    ['agroecologia', 'huerta', 'ecologia', 'biodiversidad', 'ambiente', 'sembrar', 'plantas', 'jardineria'],
+  'huerta':          ['huerta', 'agroecologia', 'jardineria', 'sembrar', 'plantas', 'ecologia'],
+  'ecologia':        ['ecologia', 'agroecologia', 'biodiversidad', 'ambiente', 'naturaleza'],
+  'biodiversidad':   ['biodiversidad', 'ecologia', 'naturaleza', 'fauna', 'flora'],
+  'deporte':         ['deporte', 'actividad fisica', 'atletismo', 'futbol', 'voleibol', 'aerobico'],
+  'ceramica':        ['ceramica', 'arcilla', 'barro', 'modelado', 'alfareria', 'porcelanicron'],
+  'arcilla':         ['arcilla', 'ceramica', 'barro', 'modelado', 'plastilina'],
+  'plastilina':      ['plastilina', 'bioplastilina', 'arcilla', 'modelado'],
+  'mostacilla':      ['mostacilla', 'bisuteria', 'manilla', 'peyote', 'tejido'],
+  'bisuteria':       ['bisuteria', 'mostacilla', 'manilla', 'joyeria'],
+  'origami':         ['origami', 'papiroflexia', 'papel'],
+  'fotografia':      ['fotografia', 'foto', 'celular', 'imagen'],
+  'astronomia':      ['astronomia', 'telescopio', 'estrellas', 'planetas', 'universo'],
+  'natacion':        ['natacion', 'piscina', 'agua', 'nadar'],
+  'amigurumi':       ['amigurumi', 'crochet', 'tejido', 'muñeco'],
+  'muñequeria':      ['muñequeria', 'muñeco', 'tela', 'artesanal'],
+};
+
+const _norm = (s) => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+function _expandirKeywords(keywords) {
+  const expandido = new Set();
+  for (const kw of keywords) {
+    const n = _norm(kw);
+    expandido.add(n);
+    const syns = SINONIMOS_TEMATICOS[n];
+    if (syns) syns.forEach(s => expandido.add(s));
+    // Stem básico: primeras letras suficientes para ser selectivo
+    if (n.length >= 6) expandido.add(n.slice(0, Math.max(5, n.length - 2)));
+  }
+  return [...expandido];
 }
 
 // ─── Tool Use: definición de herramientas y loop agentico ──────────────────
@@ -279,11 +337,9 @@ async function _ejecutarHerramienta(nombre, args) {
       }
     }
     if (nombre === 'buscar_actividades') {
-      const raices = (args.keywords || []).map((p) =>
-        p.normalize('NFD').replace(/[\u0300-\u036f]/g, '').slice(0, Math.max(4, p.length - 2))
-      );
-      const allKw = [...new Set([...args.keywords, ...raices])];
-      const resultados = await buscarActividadesPorTema(allKw, args.fecha_desde, args.fecha_hasta, [...RECINTOS_EPM])
+      const kwExpanded = _expandirKeywords(args.keywords || []);
+      log(`Keywords expandidas: [${kwExpanded.join(', ')}]`);
+      const resultados = await buscarActividadesPorTema(kwExpanded, args.fecha_desde, args.fecha_hasta, [...RECINTOS_EPM])
         .catch(() => []);
       if (!resultados.length) return `No se encontraron actividades de ese tipo entre ${args.fecha_desde} y ${args.fecha_hasta}.`;
       return _formatearResultadosHerramienta(resultados);
@@ -333,8 +389,11 @@ async function _generarConHerramientas(mensaje, session, historial) {
     { role: 'user', content: mensaje },
   ];
 
-  for (let iter = 0; iter < 3; iter++) {
-    const response = await llamadaConHerramientas(messages, HERRAMIENTAS);
+  for (let iter = 0; iter < 4; iter++) {
+    // Primera llamada: forzar uso de herramienta (tool_choice="any") para garantizar
+    // que el modelo consulte la DB antes de responder, nunca dé respuesta sin datos reales.
+    const forceTools = iter === 0;
+    const response = await llamadaConHerramientas(messages, HERRAMIENTAS, forceTools);
     const choice = response.choices[0];
 
     if (choice.finish_reason !== 'tool_calls') {
@@ -359,13 +418,18 @@ async function _contextoTematico(intentKeywords, mensaje) {
   const hoy = hoyISO();
   const fin = sumarDias(hoy, 90);
 
-  let resultados = await buscarActividadesPorTema(intentKeywords, hoy, fin, [...RECINTOS_EPM]).catch(() => []);
+  // Primero intentar con expansión local de sinónimos (más rápido, sin API)
+  const kwLocal = _expandirKeywords(intentKeywords);
+  log(`Keywords expandidas (local): [${kwLocal.join(', ')}]`);
+  let resultados = await buscarActividadesPorTema(kwLocal, hoy, fin, [...RECINTOS_EPM]).catch(() => []);
 
   if (!resultados.length) {
+    // Fallback: expansión semántica con IA
     const expanded = await expandirKeywordsConIA(intentKeywords).catch(() => []);
-    log(`Keywords expandidas por Groq: [${expanded.join(', ')}]`);
+    log(`Keywords expandidas (IA): [${expanded.join(', ')}]`);
     if (expanded.length) {
-      resultados = await buscarActividadesPorTema(expanded, hoy, fin, [...RECINTOS_EPM]).catch(() => []);
+      const allKw = [...new Set([...kwLocal, ..._expandirKeywords(expanded)])];
+      resultados = await buscarActividadesPorTema(allKw, hoy, fin, [...RECINTOS_EPM]).catch(() => []);
     }
   }
 
