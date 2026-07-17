@@ -19,6 +19,7 @@ import { iniciarWhatsApp, getSock, getLastQRInfo } from './whatsapp/whatsapp.js'
 import { deleteSession } from './whatsapp/session-store.js';
 import { deleteSession as deleteChatSession, limpiarCacheSesiones } from './utils/session-cache.js';
 import { waRouter } from './whatsapp/api.js';
+import { claudeConfigurado } from './services/groq.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -118,6 +119,7 @@ app.get('/', (req, res) => {
  */
 app.get('/health', (req, res) => {
   const scheduler = obtenerEstado();
+  const sock = getSock();
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -125,6 +127,11 @@ app.get('/health', (req, res) => {
       activo: scheduler.activo,
       ultimaEjecucion: scheduler.ultimaEjecucion,
       estadoUltima: scheduler.estadoUltima,
+    },
+    integraciones: {
+      // Si esto es false, el bot no puede generar NINGUNA respuesta con IA.
+      anthropic_configurado: claudeConfigurado(),
+      whatsapp_conectado: !!sock?.user,
     },
     version: '1.0.0',
   });

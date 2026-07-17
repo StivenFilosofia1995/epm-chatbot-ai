@@ -91,6 +91,29 @@ export async function ingestProgrammingPdf(token, file, replaceMonth = false, oc
   return data;
 }
 
+export async function ingestProgrammingExcel(token, file, replaceMonth = false) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('replace_month', String(replaceMonth));
+
+  const res = await fetch(`${API_BASE}/programming/ingest-excel`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'No se pudo procesar el Excel');
+  return data;
+}
+
+export async function getProgrammingCoverage(token) {
+  const res = await fetch(`${API_BASE}/programming/coverage`, { headers: headers(token) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'No se pudo consultar la cobertura de programación');
+  return data;
+}
+
 export async function getOpsStatus(token) {
   const res = await fetch(`/api/wa/status`, { headers: headers(token) });
   if (!res.ok) throw new Error('No se pudo cargar estado operativo');

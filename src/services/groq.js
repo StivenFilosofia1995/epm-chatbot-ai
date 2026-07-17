@@ -12,12 +12,72 @@
 import Anthropic from '@anthropic-ai/sdk';
 import 'dotenv/config';
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  throw new Error('[Claude] Falta la variable de entorno ANTHROPIC_API_KEY');
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest';
+const LOG_PREFIX = '[Claude]';
+
+// ─── Cliente perezoso ──────────────────────────────────────────────────────────
+// IMPORTANTE: nunca lanzar en la carga del módulo. Si ANTHROPIC_API_KEY falta o es
+// inválida, antes esto tumbaba TODO el proceso Node al iniciar (index.js importa
+// chat-agent.js → groq.js), dejando el bot de WhatsApp totalmente sin responder
+// aunque el resto del sistema (WhatsApp, DB, scheduler) funcionara bien.
+// Ahora el error se difiere hasta el primer uso real y cada llamada lo captura.
+let _client = null;
+
+function _getClient() {
+  if (_client) return _client;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY no está configurada. Configúrela en las variables de entorno del servicio.');
+  }
+  _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _client;
 }
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest';
+/** Diagnóstico rápido para /health — no expone la key, solo si existe. */
+export function claudeConfigurado() {
+  return !!process.env.ANTHROPIC_API_KEY;
+}
+
+// ─── Reintentos con backoff exponencial ────────────────────────────────────────
+// Cubre rate limits (429), sobrecarga del servicio (529) y errores transitorios
+// de red/servidor (500/502/503). Sin esto, un solo 429 hacía que el bot cayera
+// en el mensaje de "no tengo datos" para esa consulta — con tráfico moderado el
+// límite de tasa se alcanza fácilmente porque cada mensaje dispara 3-5 llamadas
+// a Claude (clasificar intención, extraer nombre/barrio, tool-loop).
+const REINTENTABLES = new Set([429, 500, 502, 503, 529]);
+const MAX_REINTENTOS = 3;
+
+async function _conReintento(fn, etiqueta) {
+  let ultimoError;
+  for (let intento = 0; intento <= MAX_REINTENTOS; intento++) {
+    try {
+      return await fn();
+    } catch (err) {
+      ultimoError = err;
+      const status = err?.status ?? err?.response?.status;
+
+      if (status === 401 || status === 403) {
+        console.error(`${LOG_PREFIX} ⛔ Autenticación rechazada (${status}). Verifique que ANTHROPIC_API_KEY sea válida y tenga crédito/cupo disponible.`);
+        throw err;
+      }
+
+      if (!REINTENTABLES.has(status) || intento === MAX_REINTENTOS) {
+        if (status === 429) {
+          console.error(`${LOG_PREFIX} ⛔ Límite de tasa (429) alcanzado en "${etiqueta}" tras ${intento} reintentos. Revise el plan/uso en console.anthropic.com.`);
+        } else if (status) {
+          console.error(`${LOG_PREFIX} ⛔ Error ${status} en "${etiqueta}" tras ${intento} reintentos: ${err.message}`);
+        } else {
+          console.error(`${LOG_PREFIX} ⛔ Error de red en "${etiqueta}": ${err.message}`);
+        }
+        throw err;
+      }
+
+      const espera = Math.min(500 * 2 ** intento, 4000) + Math.floor(Math.random() * 250);
+      console.warn(`${LOG_PREFIX} ⚠ ${status === 429 ? 'Límite de tasa (429)' : `Error ${status}`} en "${etiqueta}" — reintentando en ${espera}ms (intento ${intento + 1}/${MAX_REINTENTOS})...`);
+      await new Promise((r) => setTimeout(r, espera));
+    }
+  }
+  throw ultimoError;
+}
 
 // ─── System prompt principal ───────────────────────────────────────────────────
 
@@ -250,13 +310,13 @@ export async function generarRespuesta(historial, mensajeUsuario, contextoUVA = 
   }
   messages.push({ role: 'user', content: mensajeFinal });
 
-  const response = await client.messages.create({
+  const response = await _conReintento(() => _getClient().messages.create({
     model: MODEL,
     system: buildSystemPrompt(nombreUsuario, uvaNombre),
     messages,
     max_tokens: 1024,
     temperature: 0.7,
-  });
+  }), 'generarRespuesta');
 
   return response.content[0]?.text || 'Lo siento, no pude generar una respuesta en este momento.';
 }
@@ -265,13 +325,13 @@ export async function generarRespuesta(historial, mensajeUsuario, contextoUVA = 
  * Extrae el nombre propio del usuario de un mensaje si se presenta.
  */
 export async function extraerNombreConIA(mensaje) {
-  const response = await client.messages.create({
+  const response = await _conReintento(() => _getClient().messages.create({
     model: MODEL,
     system: 'Eres un extractor de nombres. Dado el mensaje de un usuario, responde ÚNICAMENTE con su nombre propio si se presentó (ej: "me llamo Carlos", "soy María", "mi nombre es Pedro"). Si no se presenta, responde exactamente: ninguno. Solo el nombre, sin puntuación ni texto extra.',
     messages: [{ role: 'user', content: mensaje }],
     max_tokens: 15,
     temperature: 0,
-  });
+  }), 'extraerNombreConIA');
   const r = response.content[0]?.text?.trim();
   return r && r.toLowerCase() !== 'ninguno' && r.length < 30 ? r : null;
 }
@@ -281,7 +341,7 @@ export async function extraerNombreConIA(mensaje) {
  */
 export async function extraerBarrioConIA(texto, listaBarrios) {
   const muestra = listaBarrios.slice(0, 80).join(', ');
-  const response = await client.messages.create({
+  const response = await _conReintento(() => _getClient().messages.create({
     model: MODEL,
     system: `Eres un extractor de entidades. Dado un mensaje de un ciudadano de Medellín,
 extrae únicamente el nombre del barrio o comuna que menciona.
@@ -290,7 +350,7 @@ Ejemplos de barrios: ${muestra}`,
     messages: [{ role: 'user', content: texto }],
     max_tokens: 20,
     temperature: 0,
-  });
+  }), 'extraerBarrioConIA');
   const resultado = response.content[0]?.text?.trim().toLowerCase();
   return resultado === 'ninguno' || !resultado ? null : resultado;
 }
@@ -300,7 +360,7 @@ Ejemplos de barrios: ${muestra}`,
  */
 export async function expandirKeywordsConIA(keywords) {
   const tema = keywords.join(', ');
-  const response = await client.messages.create({
+  const response = await _conReintento(() => _getClient().messages.create({
     model: MODEL,
     system: `Eres un asistente para un chatbot de actividades culturales en Medellín.
 Dado un tema de búsqueda, genera palabras clave relacionadas en español que podrían aparecer en nombres de talleres, cursos o actividades culturales, recreativas o formativas.
@@ -312,7 +372,7 @@ Ejemplos:
     messages: [{ role: 'user', content: tema }],
     max_tokens: 100,
     temperature: 0.3,
-  });
+  }), 'expandirKeywordsConIA');
 
   try {
     const raw = response.content[0]?.text?.trim();
@@ -329,7 +389,7 @@ Ejemplos:
  * Clasifica la intención del mensaje del usuario.
  */
 export async function clasificarIntencion(mensaje) {
-  const response = await client.messages.create({
+  const response = await _conReintento(() => _getClient().messages.create({
     model: MODEL,
     system: `Eres un clasificador de intenciones para un chatbot de WhatsApp sobre la Fundación EPM en Medellín (UVAs, Museo del Agua, Biblioteca EPM, Parque de los Deseos).
 
@@ -349,7 +409,7 @@ Formato: {"intent": "...", "keywords": [...]}`,
     messages: [{ role: 'user', content: mensaje }],
     max_tokens: 80,
     temperature: 0,
-  });
+  }), 'clasificarIntencion');
 
   const raw = response.content[0]?.text?.trim();
   const parsed = JSON.parse(raw);
@@ -469,7 +529,7 @@ export async function llamadaConHerramientas(openaiMessages, openaiTools, forceT
   const { system, messages } = _convertirMensajes(openaiMessages);
   const tools = _convertirHerramientas(openaiTools);
 
-  const response = await client.messages.create({
+  const response = await _conReintento(() => _getClient().messages.create({
     model: MODEL,
     system: system || undefined,
     messages,
@@ -479,9 +539,9 @@ export async function llamadaConHerramientas(openaiMessages, openaiTools, forceT
     tool_choice: forceTools ? { type: 'any' } : { type: 'auto' },
     temperature: 0.3,  // Baja temperatura para llamadas de herramientas más deterministas
     max_tokens: 1500,
-  });
+  }), 'llamadaConHerramientas');
 
   return _convertirRespuesta(response);
 }
 
-export default client;
+export default { generarRespuesta, extraerNombreConIA, extraerBarrioConIA, expandirKeywordsConIA, clasificarIntencion, buildSystemPromptTools, llamadaConHerramientas, claudeConfigurado };

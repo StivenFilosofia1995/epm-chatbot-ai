@@ -11,6 +11,8 @@ import {
   upsertProgramming,
   replaceMonth,
   ingestProgrammingPdf,
+  ingestProgrammingExcel,
+  getProgrammingCoverage,
   getOpsStatus,
   getOpsQr,
   getInsights,
@@ -33,12 +35,17 @@ export default function App() {
   const [opsQrImage, setOpsQrImage] = useState('');
   const [insights, setInsights] = useState(null);
   const [reiniciando, setReiniciando] = useState(false);
+  const [coverage, setCoverage] = useState(null);
 
   const [fechaFiltro, setFechaFiltro] = useState('');
   const [pdfFile, setPdfFile] = useState(null);
   const [replaceMonthOnImport, setReplaceMonthOnImport] = useState(true);
   const [importingPdf, setImportingPdf] = useState(false);
   const [importReport, setImportReport] = useState(null);
+  const [excelFile, setExcelFile] = useState(null);
+  const [replaceMonthOnExcelImport, setReplaceMonthOnExcelImport] = useState(true);
+  const [importingExcel, setImportingExcel] = useState(false);
+  const [excelImportReport, setExcelImportReport] = useState(null);
   const [form, setForm] = useState({
     uva_nombre: '',
     fecha: '',
@@ -70,13 +77,14 @@ export default function App() {
     setError('');
 
     // allSettled: cada sección carga independientemente aunque otras fallen
-    const [logsR, sessR, progR, statusR, qrR, insightR] = await Promise.allSettled([
+    const [logsR, sessR, progR, statusR, qrR, insightR, coverageR] = await Promise.allSettled([
       getLogs(token, 'mensajes'),
       getSessions(token),
       getProgramming(token, fechaFiltro),
       getOpsStatus(token),
       getOpsQr(token),
       getInsights(token),
+      getProgrammingCoverage(token),
     ]);
 
     if (logsR.status === 'fulfilled') setLogs(logsR.value.items || []);
@@ -85,9 +93,10 @@ export default function App() {
     if (statusR.status === 'fulfilled') setOpsStatus(statusR.value.bot || null);
     if (qrR.status === 'fulfilled') setOpsQr(qrR.value.qr || null);
     if (insightR.status === 'fulfilled') setInsights(insightR.value || null);
+    if (coverageR.status === 'fulfilled') setCoverage(coverageR.value || null);
 
     // Mostrar los errores que ocurrieron (sin bloquear el resto)
-    const errs = [logsR, sessR, progR, statusR, qrR, insightR]
+    const errs = [logsR, sessR, progR, statusR, qrR, insightR, coverageR]
       .filter((r) => r.status === 'rejected')
       .map((r) => r.reason?.message || 'Error desconocido');
     if (errs.length) setError(errs.join(' | '));
@@ -200,6 +209,27 @@ export default function App() {
     }
   };
 
+  const uploadExcelProgramming = async () => {
+    if (!excelFile) {
+      setError('Seleccione un archivo Excel (.xlsx) para importar programación.');
+      return;
+    }
+
+    setError('');
+    setExcelImportReport(null);
+    setImportingExcel(true);
+    try {
+      const report = await ingestProgrammingExcel(token, excelFile, replaceMonthOnExcelImport);
+      setExcelImportReport(report);
+      setExcelFile(null);
+      await loadData();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setImportingExcel(false);
+    }
+  };
+
   if (!isLogged) {
     return (
       <main className="page">
@@ -233,6 +263,13 @@ export default function App() {
       </nav>
 
       {error && <p className="error">{error}</p>}
+
+      {coverage && coverage.advertencia && (
+        <p className="error">
+          ⚠️ {coverage.advertencia}
+          {coverage.ultima_fecha && ` (última fecha cargada: ${coverage.ultima_fecha})`}
+        </p>
+      )}
 
       {tab === 'insights' && (
         <section className="card split">
@@ -439,6 +476,41 @@ export default function App() {
                 <strong>Importación exitosa</strong>
                 <p>
                   Insertados: {importReport.insertados} | Extractor: {importReport.extract_debug?.extractor || 'N/D'}
+                </p>
+              </div>
+            )}
+
+            <h3>Cargar programación desde Excel</h3>
+            <p className="muted small">
+              Recomendado para actualizar el mes: no depende de scraping ni OCR.
+              Columnas esperadas en la primera fila: uva_nombre, fecha, hora_inicio, hora_fin, actividad, descripcion, edad_recomendada.
+            </p>
+            <label htmlFor="programming-excel-file">Archivo Excel (.xlsx)</label>
+            <input
+              id="programming-excel-file"
+              type="file"
+              accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(e) => setExcelFile(e.target.files?.[0] || null)}
+            />
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={replaceMonthOnExcelImport}
+                onChange={(e) => setReplaceMonthOnExcelImport(e.target.checked)}
+              />
+              <span>Reemplazar mes detectado antes de importar</span>
+            </label>
+            <button onClick={uploadExcelProgramming} disabled={importingExcel}>
+              {importingExcel ? 'Procesando Excel...' : 'Importar Excel'}
+            </button>
+            {excelImportReport && (
+              <div className="ok">
+                <strong>Importación exitosa</strong>
+                <p>
+                  Insertados: {excelImportReport.insertados} | Hojas leídas: {excelImportReport.parse_debug?.hojas_leidas ?? 'N/D'}
+                  {excelImportReport.parse_debug?.filas_descartadas
+                    ? ` | Filas descartadas: ${excelImportReport.parse_debug.filas_descartadas}`
+                    : ''}
                 </p>
               </div>
             )}

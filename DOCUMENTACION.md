@@ -44,11 +44,15 @@ El ciudadano solo escribe su barrio o comuna y el bot le responde automáticamen
     │  • memoria_agente                    │
     └──────────────────────────────────────┘
             │
-    ┌───────▼───────────┐
-    │   Groq API (IA)   │
-    │  Llama 3.3 70B    │
-    └───────────────────┘
+    ┌───────────────────────┐
+    │  Anthropic Claude API │
+    │  (claude-3-5-haiku)   │
+    └───────────────────────┘
 ```
+
+> ⚠️ El archivo `src/services/groq.js` conserva ese nombre por compatibilidad histórica,
+> pero desde la migración de Groq → Claude, la IA real es **Anthropic Claude** y la
+> variable de entorno que hay que configurar es `ANTHROPIC_API_KEY` (no `GROQ_API_KEY`).
 
 ---
 
@@ -103,7 +107,7 @@ El sistema mapea **más de 200 barrios y comunas** de Medellín a su UVA corresp
 Cuando el usuario pregunta por actividades, el bot:
 1. Consulta la tabla `programacion_uva` en Supabase filtrada por UVA y fecha
 2. Formatea la programación en Markdown compacto
-3. Envía el contexto real a la IA (Groq / Llama 3.3 70B)
+3. Envía el contexto real a la IA (Anthropic Claude)
 4. La IA genera una respuesta natural y personalizada
 
 **La IA NUNCA inventa actividades.** Si no hay datos, responde honestamente y redirige al sitio oficial.
@@ -185,7 +189,7 @@ La sesión de WhatsApp se guarda en **Supabase** (no en archivos del servidor). 
 |-----------|-----------|---------|
 | Bot WhatsApp | Baileys (@whiskeysockets) | 6.7 |
 | Servidor principal | Node.js + Express | 20 / 4.18 |
-| IA conversacional | Groq (Llama 3.3 70B) | Cloud API |
+| IA conversacional | Anthropic Claude (claude-3-5-haiku) | Cloud API |
 | Backend admin | FastAPI (Python) | 3.12 |
 | Frontend admin | React + Vite | 18 / 5 |
 | Base de datos | Supabase (PostgreSQL) | Cloud |
@@ -226,20 +230,32 @@ La sesión de WhatsApp se guarda en **Supabase** (no en archivos del servidor). 
 | `SUPABASE_URL` | URL del proyecto Supabase |
 | `SUPABASE_KEY` | Clave anon/pública de Supabase |
 | `SUPABASE_SERVICE_KEY` | Clave de servicio (acceso total) |
-| `GROQ_API_KEY` | API Key de Groq para la IA |
+| `ANTHROPIC_API_KEY` | **API Key de Anthropic (Claude) para la IA — sin esto el bot no puede responder nada.** |
+| `ANTHROPIC_MODEL` | (Opcional) Modelo a usar. Por defecto `claude-3-5-haiku-latest` |
 | `JWT_SECRET` | Secreto para firmar tokens de admin |
 | `ADMIN_EMAIL` | Email del administrador del panel |
 | `ADMIN_PASSWORD` | Contraseña del administrador |
 | `ADMIN_API_KEY` | Clave interna bot ↔ FastAPI |
 
+> Si `ANTHROPIC_API_KEY` falta, expiró o se quedó sin cupo, revise `/health` — el campo
+> `integraciones.anthropic_configurado` indica si la key está presente. Los logs del bot
+> además marcan explícitamente `⛔ Límite de tasa (429)` o `⛔ Autenticación rechazada`
+> cuando la IA falla, para distinguir "sin cupo/API key mala" de otros errores.
+
 ---
 
 ## 🔄 Actualizaciones de programación
 
-Para cargar nueva programación mensual:
-1. Editar el script `scripts/seed_mayo_2026.py` con los datos del nuevo mes
-2. Ejecutar: `python scripts/seed_mayo_2026.py`
+**Vía recomendada — Panel admin (`/admin` → pestaña "Programación"):**
+1. Exportar/preparar un Excel (.xlsx) con columnas `uva_nombre, fecha, hora_inicio, hora_fin, actividad, descripcion, edad_recomendada` (encabezado en la primera fila, cualquier orden)
+2. Subirlo en "Cargar programación desde Excel", opcionalmente marcando "Reemplazar mes detectado" para vaciar ese mes antes de insertar
 3. El bot refleja los cambios inmediatamente (sin necesidad de redesplegar)
+
+También existe una vía para PDF (con OCR) en el mismo panel, útil si solo se cuenta con el volante oficial en PDF.
+
+El panel muestra una advertencia si el mes actual no tiene programación cargada — esta es la causa más común de que el bot responda "no tengo programación" en vez de fallar por completo.
+
+**Vía alternativa (scripts, uso interno):** editar y ejecutar un script de seed en `scripts/` (ej. `python scripts/seed_junio_2026.py`) — requiere acceso a variables de entorno de Supabase.
 
 ---
 

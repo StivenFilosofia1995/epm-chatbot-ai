@@ -11,7 +11,7 @@ Sistema agéntico conversacional para que los ciudadanos de Medellín consulten 
 | **Scraper** | Descarga el PDF de programación desde el portal de EPM |
 | **Parser** | Extrae y estructura las actividades por UVA y fecha |
 | **Geo-mapper** | Mapea el barrio/comuna del usuario a su UVA correspondiente |
-| **Chat** | Responde en lenguaje natural usando Groq (LLaMA 3.1) |
+| **Chat** | Responde en lenguaje natural usando Anthropic Claude |
 | **Scheduler** | Actualiza automáticamente la programación todos los días a las 6 AM |
 
 ---
@@ -22,7 +22,7 @@ Sistema agéntico conversacional para que los ciudadanos de Medellín consulten 
 - **Framework**: Express.js
 - **PDF/OCR**: pdf-parse + tesseract.js (fallback)
 - **Base de datos**: Supabase (PostgreSQL)
-- **LLM**: Groq AI — `llama-3.1-70b-versatile`
+- **LLM**: Anthropic Claude — `claude-3-5-haiku-latest` (el archivo se llama `groq.js` por legado histórico, pero la IA real es Claude)
 - **Scheduler**: node-cron
 - **Deploy**: Railway
 
@@ -54,12 +54,15 @@ Editar `.env` con tus credenciales:
 ```env
 SUPABASE_URL=https://xxxxx.supabase.co
 SUPABASE_KEY=tu-anon-key
-GROQ_API_KEY=tu-groq-api-key
-GROQ_MODEL=llama-3.1-70b-versatile
+ANTHROPIC_API_KEY=tu-anthropic-api-key
+ANTHROPIC_MODEL=claude-3-5-haiku-latest
 PORT=3000
 ADMIN_API_KEY=clave-secreta-para-scrape-manual
 EPM_PROGRAMACION_URL=https://www.grupo-epm.com/site/fundacionepm/programacion/
 ```
+
+> ⚠️ **`ANTHROPIC_API_KEY` es obligatoria.** Si falta o es inválida, el bot no puede
+> generar ninguna respuesta — verifíquelo en `GET /health` (`integraciones.anthropic_configurado`).
 
 ### 4. Crear tablas en Supabase
 
@@ -131,11 +134,27 @@ curl -X POST http://localhost:3000/scrape \
 
 ### `GET /health`
 
-Health check para Railway.
+Health check para Railway. Incluye `integraciones.anthropic_configurado` y
+`integraciones.whatsapp_conectado` para diagnóstico rápido si el bot deja de responder.
 
 ```bash
 curl http://localhost:3000/health
 ```
+
+---
+
+## Actualizar la programación mensual
+
+La forma recomendada es el **panel admin** (`/admin` → pestaña "Programación"):
+
+- **Subir Excel (.xlsx)** — vía preferida, no depende de scraping ni OCR. Columnas
+  esperadas en la primera fila (cualquier orden): `uva_nombre, fecha, hora_inicio,
+  hora_fin, actividad, descripcion, edad_recomendada`. Puede marcar "Reemplazar mes
+  detectado" para vaciar ese mes antes de insertar.
+- **Subir PDF** — usa OCR/parser automático, útil si solo se tiene el volante oficial.
+- El panel muestra una advertencia si el mes actual no tiene programación cargada —
+  esa es la causa más común de que el bot responda "no tengo programación" en vez de
+  fallar por completo.
 
 ---
 
@@ -190,8 +209,8 @@ En el panel de Railway → tu proyecto → **Variables**:
 |---|---|
 | `SUPABASE_URL` | URL de tu proyecto Supabase |
 | `SUPABASE_KEY` | anon/public key de Supabase |
-| `GROQ_API_KEY` | API key de [console.groq.com](https://console.groq.com) |
-| `GROQ_MODEL` | `llama-3.1-70b-versatile` |
+| `ANTHROPIC_API_KEY` | API key de [console.anthropic.com](https://console.anthropic.com) — **obligatoria** |
+| `ANTHROPIC_MODEL` | (Opcional) `claude-3-5-haiku-latest` por defecto |
 | `ADMIN_API_KEY` | Clave aleatoria segura (usa `openssl rand -hex 32`) |
 | `EPM_PROGRAMACION_URL` | URL de la página de programación EPM |
 
@@ -213,13 +232,17 @@ En el panel de Railway → tu proyecto → **Variables**:
 
 ---
 
-## Obtener API keys gratuitas
+## Obtener API keys
 
-### Groq AI (LLM)
-1. Ve a [console.groq.com](https://console.groq.com)
-2. Crea una cuenta gratuita
-3. **API Keys** → **Create API Key**
-4. Límite free tier: **14,400 req/día** (más que suficiente)
+### Anthropic Claude (LLM)
+1. Ve a [console.anthropic.com](https://console.anthropic.com)
+2. Crea una cuenta y carga crédito (no tiene tier gratuito perpetuo como Groq)
+3. **API Keys** → **Create Key**
+4. Revise su límite de tasa (rate limit) según el plan — cada mensaje del bot dispara
+   varias llamadas a Claude (clasificar intención, extraer nombre/barrio, tool-loop),
+   así que con tráfico moderado es fácil alcanzar el límite en un tier bajo. El bot
+   reintenta automáticamente con backoff ante un 429, pero si el límite persiste
+   verá `⛔ Límite de tasa (429)` en los logs — ahí toca subir de tier o esperar.
 
 ### Supabase
 1. Ve a [supabase.com](https://supabase.com)
@@ -244,7 +267,7 @@ uva-medellin-bot/
 │   │   └── barrios-uva-map.js  ← Mapa estático ~300 barrios
 │   ├── services/
 │   │   ├── supabase.js         ← Cliente y helpers de BD
-│   │   ├── groq.js             ← Cliente LLM + prompts
+│   │   ├── groq.js             ← Cliente Anthropic Claude + prompts (nombre legado)
 │   │   └── pdf-reader.js       ← Extracción PDF/OCR
 │   ├── utils/
 │   │   ├── normalizer.js       ← Normalización de texto
@@ -259,14 +282,14 @@ uva-medellin-bot/
 
 ---
 
-## Costos estimados (tier gratuito)
+## Costos estimados
 
 | Servicio | Límite free | Uso estimado |
 |---|---|---|
 | Railway Hobby | $5 crédito/mes | ~$2/mes |
 | Supabase | 500MB, 2GB BW | < 50MB |
-| Groq API | 14,400 req/día | < 500 req/día |
-| **Total** | **~$0/mes** | ✅ |
+| Anthropic Claude | Según plan/crédito cargado | Varía con tráfico — no tiene tier gratuito perpetuo |
+| **Total** | — | Monitorear uso en console.anthropic.com |
 
 ---
 
