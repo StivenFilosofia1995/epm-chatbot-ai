@@ -20,6 +20,7 @@ import { deleteSession } from './whatsapp/session-store.js';
 import { deleteSession as deleteChatSession, limpiarCacheSesiones } from './utils/session-cache.js';
 import { waRouter } from './whatsapp/api.js';
 import { claudeConfigurado } from './services/groq.js';
+import { supabaseConfigurado } from './services/supabase.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -131,6 +132,8 @@ app.get('/health', (req, res) => {
     integraciones: {
       // Si esto es false, el bot no puede generar NINGUNA respuesta con IA.
       anthropic_configurado: claudeConfigurado(),
+      // Si esto es false, el bot no puede leer/guardar sesión, historial ni programación.
+      supabase_configurado: supabaseConfigurado(),
       whatsapp_conectado: !!sock?.user,
     },
     version: '1.0.0',

@@ -6,12 +6,39 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  throw new Error('[Supabase] Faltan variables de entorno SUPABASE_URL o SUPABASE_KEY');
+  console.error('[Supabase] ⛔ Faltan variables de entorno SUPABASE_URL o SUPABASE_KEY. El bot no podrá acceder a la base de datos hasta que se configuren.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
-  realtime: { transport: ws },
+let _client = null;
+
+function _getClient() {
+  if (_client) return _client;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('SUPABASE_URL o SUPABASE_KEY no están configuradas.');
+  }
+  _client = createClient(supabaseUrl, supabaseKey, { realtime: { transport: ws } });
+  return _client;
+}
+
+// IMPORTANTE: antes, si SUPABASE_URL/SUPABASE_KEY faltaban o eran inválidas
+// (proyecto Supabase pausado, key rotada, etc.), esto lanzaba un error AL
+// IMPORTAR el módulo — y como casi todo el bot importa supabase.js (sesión de
+// WhatsApp, historial, memoria, chat_control...), eso tumbaba TODO el proceso
+// Node al iniciar, igual que el bug ya corregido en groq.js. Ahora el cliente
+// es perezoso: el módulo siempre carga, y el error real solo aparece cuando
+// se usa de verdad — donde el código que llama ya tiene try/catch.
+export const supabase = new Proxy({}, {
+  get(_target, prop) {
+    const client = _getClient();
+    const value = client[prop];
+    return typeof value === 'function' ? value.bind(client) : value;
+  },
 });
+
+/** Diagnóstico rápido para /health — no expone la key, solo si está presente. */
+export function supabaseConfigurado() {
+  return !!(supabaseUrl && supabaseKey);
+}
 
 // ─── Helpers de programación ─────────────────────────────────────────────────
 
