@@ -7,13 +7,16 @@
  * - Watchdog cada 5 min: fuerza reconexión si el socket está muerto
  */
 
-// Baileys v7: el paquete se renombró de @whiskeysockets/baileys a "baileys",
-// y makeWASocket pasó de exportación nombrada a exportación por defecto.
-import makeWASocket, {
+// Revertido a v6.7.22: v7 (release candidate) rompió el ENVÍO de mensajes
+// para TODOS los contactos, no solo los @lid que se intentaba arreglar —
+// una regresión mucho peor que el problema original. Ver commit que revierte
+// esto para el detalle; retomar v7 solo cuando exista una release estable.
+import {
+  makeWASocket,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-} from 'baileys';
+} from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 

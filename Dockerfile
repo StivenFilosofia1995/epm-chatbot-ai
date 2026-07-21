@@ -28,10 +28,7 @@ RUN pip install --no-cache-dir -r /tmp/admin-requirements.txt
 
 # ── Dependencias Node.js (bot) ───────────────────────────────────────────────
 COPY package*.json ./
-# npm install (no ci): el lockfile no pudo regenerarse localmente al migrar
-# Baileys (cambio de paquete @whiskeysockets/baileys -> baileys, v6 -> v7).
-# npm install resuelve igual sin requerir que el lockfile ya coincida exacto.
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # ── Código fuente completo ───────────────────────────────────────────────────
 COPY . .
