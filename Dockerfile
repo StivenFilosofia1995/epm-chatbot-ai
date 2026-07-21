@@ -28,7 +28,9 @@ RUN pip install --no-cache-dir -r /tmp/admin-requirements.txt
 
 # ── Dependencias Node.js (bot) ───────────────────────────────────────────────
 COPY package*.json ./
-RUN npm ci --omit=dev
+# npm install (no ci): baileys@7.0.0-rc13 otra vez — el lockfile no coincide
+# exacto y no hay forma de regenerarlo localmente (sin node/npm en este entorno).
+RUN npm install --omit=dev
 
 # ── Código fuente completo ───────────────────────────────────────────────────
 COPY . .

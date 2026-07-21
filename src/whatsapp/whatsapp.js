@@ -7,16 +7,17 @@
  * - Watchdog cada 5 min: fuerza reconexión si el socket está muerto
  */
 
-// Revertido a v6.7.22: v7 (release candidate) rompió el ENVÍO de mensajes
-// para TODOS los contactos, no solo los @lid que se intentaba arreglar —
-// una regresión mucho peor que el problema original. Ver commit que revierte
-// esto para el detalle; retomar v7 solo cuando exista una release estable.
-import {
-  makeWASocket,
+// De vuelta a v7: se confirmó que la falla de entrega NO era específica de
+// la versión (v6 con sesión nueva tuvo el mismo problema) — es la sesión de
+// cifrado que este dispositivo vinculado no logra establecer con contactos
+// @lid. v7 es la única versión con las herramientas de mapeo LID/PN
+// (sock.signalRepository.lidMapping, MessageKey.remoteJidAlt) relevantes
+// para intentar resolver esto. makeWASocket ahora es exportación por defecto.
+import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-} from '@whiskeysockets/baileys';
+} from 'baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 
@@ -126,7 +127,11 @@ export async function iniciarWhatsApp() {
       },
       printQRInTerminal: false,
       browser: ['UVA Medellín Bot', 'Chrome', '1.0.0'],
-      syncFullHistory: false,
+      // true (antes false): sin esto, el bot nunca heredaba las sesiones de
+      // cifrado que el teléfono principal ya tenía con contactos que le
+      // escriben por primera vez al bot — posible causa de que el envío
+      // fallara en silencio para contactos @lid.
+      syncFullHistory: true,
       markOnlineOnConnect: false,
       // Keepalive: ping WhatsApp cada 25s para mantener la conexión activa
       keepAliveIntervalMs: 25_000,

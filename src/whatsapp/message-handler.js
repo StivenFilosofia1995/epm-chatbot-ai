@@ -65,8 +65,12 @@ export async function procesarMensajeWhatsApp(sock, msg) {
   if (!respuesta) return;
 
   // 6. Enviar respuesta por WhatsApp
-  await sock.sendMessage(jid, { text: respuesta });
-  console.log(`[WA-MSG] 🤖 Bot respondió a ${telefono}: ${respuesta.slice(0, 80)}...`);
+  // remoteJidAlt (Baileys v7): JID alterno basado en número de teléfono para
+  // el mismo contacto @lid. Si existe, puede tener una sesión de cifrado ya
+  // establecida (con el teléfono principal) que el JID @lid puro no tiene.
+  const jidRespuesta = msg.key.remoteJidAlt || jid;
+  await sock.sendMessage(jidRespuesta, { text: respuesta });
+  console.log(`[WA-MSG] 🤖 Bot respondió a ${telefono} (via ${jidRespuesta}): ${respuesta.slice(0, 80)}...`);
 
   // 7. Guardar respuesta del bot
   await guardarMensaje({
