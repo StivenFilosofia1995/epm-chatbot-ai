@@ -206,12 +206,14 @@ export default function App() {
     setReiniciando(true);
     setError('');
     try {
+      // El backend responde de inmediato y sigue borrando en segundo plano
+      // (evita depender de ningun timeout de proxy para una operacion lenta).
       const reporte = await resetTotal(token);
-      console.log('[ResetTotal]', reporte);
+      window.alert(reporte.mensaje || 'Borrado iniciado en segundo plano.');
       setTimeout(async () => {
         await loadData();
         setReiniciando(false);
-      }, 3000);
+      }, 8000);
     } catch (err) {
       setError(err.message);
       setReiniciando(false);

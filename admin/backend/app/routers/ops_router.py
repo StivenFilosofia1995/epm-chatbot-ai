@@ -1,4 +1,5 @@
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.request import Request, urlopen
@@ -95,6 +96,16 @@ def _borrar_tabla(tabla: str, columna: str):
         return tabla, f'error: {exc}'
 
 
+def _reset_total_en_segundo_plano():
+    with ThreadPoolExecutor(max_workers=len(_TABLAS_RESET_TOTAL)) as pool:
+        resultados = pool.map(lambda kv: _borrar_tabla(*kv), _TABLAS_RESET_TOTAL.items())
+    borrados = dict(resultados)
+
+    whatsapp = _post_bot('reiniciar')
+
+    print(f'[ResetTotal] completado. borrados={borrados} whatsapp={whatsapp}')
+
+
 @router.post('/reset-total')
 def reset_total(_admin: Annotated[str, Depends(get_current_admin)]):
     """Borra TODO el historial (mensajes, contactos, conversaciones, memoria,
@@ -103,18 +114,21 @@ def reset_total(_admin: Annotated[str, Depends(get_current_admin)]):
     el estado quedó inconsistente. El botón del panel debe confirmar dos veces
     antes de llamar esto.
 
-    Los borrados corren en paralelo (no uno tras otro): con 5 tablas y la
-    llamada al bot para reiniciar WhatsApp, hacerlo secuencial se acercaba
-    demasiado al timeout del proxy Node → FastAPI (antes 10s, ahora 30s) y
-    el usuario veía "panel no disponible" aunque todo funcionara bien.
+    Corre en SEGUNDO PLANO y responde de inmediato: hacerlo de forma síncrona
+    (esperar a que terminen los borrados + el reinicio de WhatsApp antes de
+    responder) se acercaba o superaba el timeout del proxy Node → FastAPI
+    (probado hasta 30s sin ser suficiente), y el usuario veía "tardó
+    demasiado" aunque todo terminara funcionando bien igual. El resultado
+    real queda en los logs del servidor (buscar "[ResetTotal] completado").
     """
-    with ThreadPoolExecutor(max_workers=len(_TABLAS_RESET_TOTAL)) as pool:
-        resultados = pool.map(lambda kv: _borrar_tabla(*kv), _TABLAS_RESET_TOTAL.items())
-    borrados = dict(resultados)
+    threading.Thread(target=_reset_total_en_segundo_plano, daemon=True).start()
 
-    whatsapp = _post_bot('reiniciar')
-
-    return {'ok': True, 'borrados': borrados, 'whatsapp': whatsapp}
+    return {
+        'ok': True,
+        'mensaje': 'Borrado iniciado en segundo plano (mensajes, contactos, conversaciones, '
+                   'memoria y sesión de WhatsApp). Puede tardar unos segundos en completarse — '
+                   'espere y refresque el panel.',
+    }
 
 
 @router.get('/insights')
