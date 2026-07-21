@@ -71,6 +71,14 @@ export async function procesarMensajeWhatsApp(sock, msg) {
   // establecida (con el teléfono principal) que el JID @lid puro no tiene.
   const jidRespuesta = msg.key.remoteJidAlt || jid;
   const contenido = { text: respuesta };
+
+  // Anti-baneo: WhatsApp penaliza patrones de respuesta instantánea/robótica
+  // como señal de comportamiento de bot. Simular "escribiendo..." con una
+  // pausa proporcional a la longitud de la respuesta imita el tiempo humano
+  // real de redacción — no arregla la entrega a @lid, pero reduce el riesgo
+  // de que la cuenta sea señalada por comportamiento automatizado.
+  await _simularEscritura(sock, jidRespuesta, respuesta);
+
   const enviado = await sock.sendMessage(jidRespuesta, contenido);
   // Necesario para que Baileys pueda reenviar este mensaje si WhatsApp lo
   // solicita (ver sent-message-cache.js) — sin esto, el reintento normal del
@@ -90,6 +98,28 @@ export async function procesarMensajeWhatsApp(sock, msg) {
 }
 
 // ─── Helpers privados ────────────────────────────────────────────────────────
+
+/**
+ * Simula tiempo de escritura humano antes de enviar: muestra "escribiendo..."
+ * y espera una pausa proporcional a la longitud del texto (con variación
+ * aleatoria), en vez de responder instantáneamente. Nunca debe bloquear el
+ * envío real si algo falla (p. ej. el contacto no permite ver presencia).
+ */
+async function _simularEscritura(sock, jid, texto) {
+  try {
+    await sock.sendPresenceUpdate('composing', jid);
+  } catch { /* no crítico */ }
+
+  const palabras = texto.split(/\s+/).filter(Boolean).length;
+  const baseMs = 500 + palabras * 180; // ~0.18s por palabra + base de 0.5s
+  const jitterMs = Math.random() * 900;
+  const esperaMs = Math.min(baseMs + jitterMs, 9000); // tope de 9s
+  await new Promise((resolve) => setTimeout(resolve, esperaMs));
+
+  try {
+    await sock.sendPresenceUpdate('paused', jid);
+  } catch { /* no crítico */ }
+}
 
 function extraerTexto(msg) {
   const m = msg.message;
