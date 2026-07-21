@@ -1,4 +1,5 @@
 from supabase import create_client, Client
+from supabase.client import ClientOptions
 from .config import settings
 
 # Cliente perezoso: antes, create_client() se ejecutaba AL IMPORTAR este modulo,
@@ -9,6 +10,15 @@ from .config import settings
 # dentro de un endpoint, que ya responde con un error HTTP normal.
 _client: Client | None = None
 
+# CRITICO: sin timeout explicito, una llamada a Supabase que se cuelga (mala
+# conectividad, DNS, etc.) bloquea ese hilo PARA SIEMPRE. FastAPI corre TODOS
+# los endpoints sync (`def`, no `async def`) en el mismo pool de hilos
+# compartido — un solo hilo asi filtrado deja esa capacidad permanentemente
+# ocupada, y endpoints totalmente distintos y rapidos (como reset-total)
+# terminan esperando un hilo libre que nunca llega, pareciendo colgados
+# aunque su propio codigo sea instantaneo.
+_SUPABASE_TIMEOUT_SEGUNDOS = 15
+
 
 def _get_client() -> Client:
     global _client
@@ -16,7 +26,14 @@ def _get_client() -> Client:
         return _client
     if not settings.supabase_url or not settings.supabase_service_key:
         raise RuntimeError('SUPABASE_URL o SUPABASE_SERVICE_KEY no estan configuradas en el backend admin.')
-    _client = create_client(settings.supabase_url, settings.supabase_service_key)
+    _client = create_client(
+        settings.supabase_url,
+        settings.supabase_service_key,
+        options=ClientOptions(
+            postgrest_client_timeout=_SUPABASE_TIMEOUT_SEGUNDOS,
+            storage_client_timeout=_SUPABASE_TIMEOUT_SEGUNDOS,
+        ),
+    )
     return _client
 
 
