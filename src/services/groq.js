@@ -292,6 +292,13 @@ function _convertirRespuesta(response) {
   };
 }
 
+// Claude a veces envuelve el JSON solicitado en fences de markdown (```json ... ```)
+// pese a que el prompt pide "SOLO JSON" — esto los limpia antes de parsear.
+function _parsearJSON(raw) {
+  const limpio = String(raw ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  return JSON.parse(limpio);
+}
+
 // ─── Funciones exportadas (misma API del módulo legacy) ─────────────────────
 
 /**
@@ -375,8 +382,7 @@ Ejemplos:
   }), 'expandirKeywordsConIA');
 
   try {
-    const raw = response.content[0]?.text?.trim();
-    const arr = JSON.parse(raw);
+    const arr = _parsearJSON(response.content[0]?.text);
     return Array.isArray(arr)
       ? arr.map(k => String(k).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
       : [];
@@ -411,8 +417,7 @@ Formato: {"intent": "...", "keywords": [...]}`,
     temperature: 0,
   }), 'clasificarIntencion');
 
-  const raw = response.content[0]?.text?.trim();
-  const parsed = JSON.parse(raw);
+  const parsed = _parsearJSON(response.content[0]?.text);
   return { intent: parsed.intent || 'normal', keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [] };
 }
 
