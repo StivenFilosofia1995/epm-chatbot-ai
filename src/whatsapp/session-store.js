@@ -8,7 +8,8 @@
  * Esto permite que Railway reinicie el contenedor sin perder la sesión de WhatsApp.
  */
 
-import { initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
+// Baileys v7: el paquete se renombró de @whiskeysockets/baileys a "baileys".
+import { initAuthCreds, BufferJSON } from 'baileys';
 import { supabase } from '../services/supabase.js';
 
 const SESSION_ID = 'default';

@@ -7,12 +7,13 @@
  * - Watchdog cada 5 min: fuerza reconexión si el socket está muerto
  */
 
-import {
-  makeWASocket,
+// Baileys v7: el paquete se renombró de @whiskeysockets/baileys a "baileys",
+// y makeWASocket pasó de exportación nombrada a exportación por defecto.
+import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-} from '@whiskeysockets/baileys';
+} from 'baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 
