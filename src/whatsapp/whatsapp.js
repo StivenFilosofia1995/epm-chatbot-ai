@@ -23,6 +23,7 @@ import qrcode from 'qrcode-terminal';
 
 import { procesarMensajeWhatsApp } from './message-handler.js';
 import { useSupabaseAuthState, deleteSession } from './session-store.js';
+import { obtenerMensajeEnviado } from './sent-message-cache.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -135,6 +136,13 @@ export async function iniciarWhatsApp() {
       markOnlineOnConnect: false,
       // Keepalive: ping WhatsApp cada 25s para mantener la conexión activa
       keepAliveIntervalMs: 25_000,
+      // CRÍTICO: sin esto, cuando WhatsApp pide reenviar un mensaje que el
+      // destinatario no pudo descifrar (mecanismo normal del protocolo al
+      // establecer sesión nueva — el caso típico de contactos @lid, ver
+      // github.com/WhiskeySockets/Baileys/issues/1767), Baileys no tiene
+      // nada que reenviar y el destinatario queda esperando ese mensaje
+      // para siempre, sin que sendMessage() reporte ningún error.
+      getMessage: async (key) => obtenerMensajeEnviado(key.id),
     });
     sock = miSock;
 

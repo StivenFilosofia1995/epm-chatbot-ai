@@ -12,6 +12,7 @@
 import { supabase } from '../services/supabase.js';
 import { procesarMensaje } from '../agents/chat-agent.js';
 import { botDebeResponder, inicializarChat } from './chat-control.js';
+import { guardarMensajeEnviado } from './sent-message-cache.js';
 
 /**
  * Procesa un mensaje entrante de WhatsApp.
@@ -69,7 +70,12 @@ export async function procesarMensajeWhatsApp(sock, msg) {
   // el mismo contacto @lid. Si existe, puede tener una sesión de cifrado ya
   // establecida (con el teléfono principal) que el JID @lid puro no tiene.
   const jidRespuesta = msg.key.remoteJidAlt || jid;
-  await sock.sendMessage(jidRespuesta, { text: respuesta });
+  const contenido = { text: respuesta };
+  const enviado = await sock.sendMessage(jidRespuesta, contenido);
+  // Necesario para que Baileys pueda reenviar este mensaje si WhatsApp lo
+  // solicita (ver sent-message-cache.js) — sin esto, el reintento normal del
+  // protocolo Signal no tiene nada que reenviar y falla en silencio.
+  guardarMensajeEnviado(enviado?.key?.id, contenido);
   console.log(`[WA-MSG] 🤖 Bot respondió a ${telefono} (via ${jidRespuesta}): ${respuesta.slice(0, 80)}...`);
 
   // 7. Guardar respuesta del bot
