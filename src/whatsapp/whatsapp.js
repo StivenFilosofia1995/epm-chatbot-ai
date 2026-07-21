@@ -238,6 +238,20 @@ export async function iniciarWhatsApp() {
       }
     });
 
+    // ─── Diagnóstico: estado real de entrega de mensajes salientes ───────────
+    // Sin esto no había forma de saber si WhatsApp reportaba un error real
+    // (contacto @lid sin mapping, sesión de cifrado no establecida, etc.) —
+    // sock.sendMessage() no lanza excepción aunque el mensaje nunca se entregue.
+    // status: 0 error | 1 pendiente | 2 servidor recibió | 3 entregado | 4 leído
+    miSock.ev.on('messages.update', (actualizaciones) => {
+      if (sock !== miSock) return;
+      for (const { key, update } of actualizaciones) {
+        if (update.status !== undefined || update.messageStubType) {
+          console.log(`[WA-STATUS] ${key.remoteJid} (fromMe=${key.fromMe}) → status=${update.status ?? '?'} stub=${update.messageStubType ?? ''} ${update.messageStubParameters ? JSON.stringify(update.messageStubParameters) : ''}`);
+        }
+      }
+    });
+
     return miSock;
   } finally {
     iniciando = false;
