@@ -4,6 +4,7 @@ import re
 import unicodedata
 from datetime import date
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from typing import Annotated
 from ..deps import get_current_admin
 from ..supabase_client import supabase
@@ -307,7 +308,15 @@ async def ingest_pdf_programming(
     if not pdf_bytes:
         raise HTTPException(status_code=400, detail='El PDF esta vacio')
 
-    text, extract_debug = extract_text_from_pdf_bytes(pdf_bytes, ocr_lang=ocr_lang)
+    # CRITICO: extract_text_from_pdf_bytes (OCR, puede tardar decenas de
+    # segundos) y las llamadas a Supabase son SINCRONAS/bloqueantes. Este
+    # endpoint es `async def` (necesario por `await file.read()`), y FastAPI
+    # NO offloadea automaticamente el cuerpo de un handler async a un thread
+    # — a diferencia de un handler sync normal. Sin run_in_threadpool, una
+    # llamada bloqueante aca congela el ÚNICO event loop de uvicorn para
+    # TODA la app: cualquier otra peticion (incluso a rutas totalmente
+    # distintas, como reset-total) queda colgada hasta que esta termine.
+    text, extract_debug = await run_in_threadpool(extract_text_from_pdf_bytes, pdf_bytes, ocr_lang=ocr_lang)
     if not text.strip():
         raise HTTPException(status_code=422, detail='No se pudo extraer texto util del PDF')
 
@@ -319,7 +328,7 @@ async def ingest_pdf_programming(
         )
 
     if replace_month:
-        _replace_month_if_requested(parsed.items[0].get('fecha'))
+        await run_in_threadpool(_replace_month_if_requested, parsed.items[0].get('fecha'))
 
     payload = [
         {
@@ -334,7 +343,7 @@ async def ingest_pdf_programming(
         for item in parsed.items
     ]
 
-    supabase.table('programacion_uva').insert(payload).execute()
+    await run_in_threadpool(lambda: supabase.table('programacion_uva').insert(payload).execute())
 
     return {
         'ok': True,
@@ -373,7 +382,12 @@ async def ingest_excel_programming(
         raise HTTPException(status_code=400, detail='El archivo esta vacio')
 
     try:
-        items, parse_debug = parse_programming_excel(excel_bytes, uva_nombre.strip(), anio, mes)
+        # parse_programming_excel + las llamadas a Supabase son sincronas —
+        # ver la nota extensa en ingest_pdf_programming: sin run_in_threadpool
+        # aca, esto bloquea el event loop entero de uvicorn para TODA la app.
+        items, parse_debug = await run_in_threadpool(
+            parse_programming_excel, excel_bytes, uva_nombre.strip(), anio, mes,
+        )
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f'No se pudo leer el Excel: {exc}')
 
@@ -390,14 +404,18 @@ async def ingest_excel_programming(
         # (a diferencia de /replace-month y el PDF, que cubren todos a la vez).
         first_day = f'{anio:04d}-{mes:02d}-01'
         next_month = f'{anio + (1 if mes == 12 else 0):04d}-{(1 if mes == 12 else mes + 1):02d}-01'
-        supabase.table('programacion_uva') \
-            .delete() \
-            .eq('uva_nombre', uva_nombre.strip()) \
-            .gte('fecha', first_day) \
-            .lt('fecha', next_month) \
-            .execute()
 
-    supabase.table('programacion_uva').insert(items).execute()
+        def _borrar_mes_espacio():
+            supabase.table('programacion_uva') \
+                .delete() \
+                .eq('uva_nombre', uva_nombre.strip()) \
+                .gte('fecha', first_day) \
+                .lt('fecha', next_month) \
+                .execute()
+
+        await run_in_threadpool(_borrar_mes_espacio)
+
+    await run_in_threadpool(lambda: supabase.table('programacion_uva').insert(items).execute())
 
     return {
         'ok': True,
