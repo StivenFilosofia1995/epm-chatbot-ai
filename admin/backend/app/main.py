@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
@@ -29,12 +29,22 @@ app.add_middleware(
 )
 
 
+# Sin esto, una excepcion no manejada en un endpoint devolvia texto plano (no
+# JSON) — el frontend hace `res.json().catch(() => ({}))` esperando un campo
+# `detail`, asi que terminaba mostrando siempre el mensaje generico de fallback
+# ("No se pudo borrar todo", etc.) sin ninguna pista real del error.
+@app.exception_handler(Exception)
+async def manejador_excepciones_no_capturadas(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={'detail': str(exc)})
+
+
 @app.get('/health')
 def health():
     return {
         'status': 'ok',
         'service': 'uva-admin-api',
         'admin_email_loaded': settings.admin_email,  # debug temporal
+        'supabase_configurado': bool(settings.supabase_url and settings.supabase_service_key),
     }
 
 

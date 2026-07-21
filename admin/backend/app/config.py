@@ -4,8 +4,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
-    supabase_url: str
-    supabase_service_key: str
+    # Defaults vacios (no requeridos) a proposito: si faltan, el proceso FastAPI
+    # completo NO debe morir al importar este modulo (eso tumbaba el panel
+    # admin entero sin nada que lo reinicie). El error real se difiere al
+    # primer uso real en supabase_client.py, donde el endpoint que lo llame
+    # ya devuelve un error HTTP normal en vez de crashear el proceso.
+    supabase_url: str = ''
+    supabase_service_key: str = ''
 
     admin_email: str
     admin_password: str
