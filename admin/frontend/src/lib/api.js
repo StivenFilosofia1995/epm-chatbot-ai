@@ -143,3 +143,13 @@ export async function disconnectWhatsApp(token) {
   if (!res.ok) throw new Error('No se pudo desconectar WhatsApp');
   return res.json();
 }
+
+export async function resetTotal(token) {
+  const res = await fetch(`${API_BASE}/ops/reset-total`, {
+    method: 'POST',
+    headers: headers(token),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'No se pudo borrar todo');
+  return data;
+}

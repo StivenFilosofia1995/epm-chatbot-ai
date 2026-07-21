@@ -74,6 +74,39 @@ def ops_disconnect(_admin: Annotated[str, Depends(get_current_admin)]):
     return result
 
 
+# Tabla → columna a usar en el filtro "neq" para borrar todas las filas
+# (Supabase no soporta un delete() sin filtro; neq con un valor imposible
+# equivale a "todas las filas reales").
+_TABLAS_RESET_TOTAL = {
+    'mensajes': 'jid',
+    'chat_control': 'jid',
+    'contactos': 'jid',
+    'conversaciones': 'session_id',
+    'memoria_agente': 'session_id',
+}
+
+
+@router.post('/reset-total')
+def reset_total(_admin: Annotated[str, Depends(get_current_admin)]):
+    """Borra TODO el historial (mensajes, contactos, conversaciones, memoria,
+    control humano/bot) y fuerza un reinicio limpio de la sesión de WhatsApp
+    (pide QR nuevo). Acción IRREVERSIBLE — pensada para empezar de cero cuando
+    el estado quedó inconsistente. El botón del panel debe confirmar dos veces
+    antes de llamar esto.
+    """
+    borrados = {}
+    for tabla, columna in _TABLAS_RESET_TOTAL.items():
+        try:
+            res = supabase.table(tabla).delete().neq(columna, '__no_op__').execute()
+            borrados[tabla] = len(res.data or [])
+        except Exception as exc:
+            borrados[tabla] = f'error: {exc}'
+
+    whatsapp = _post_bot('reiniciar')
+
+    return {'ok': True, 'borrados': borrados, 'whatsapp': whatsapp}
+
+
 @router.get('/insights')
 def ops_insights(_admin: Annotated[str, Depends(get_current_admin)]):
     now = datetime.now(timezone.utc)

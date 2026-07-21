@@ -17,6 +17,7 @@ import {
   getOpsQr,
   getInsights,
   disconnectWhatsApp,
+  resetTotal,
 } from './lib/api.js';
 
 const TABS = ['insights', 'logs', 'sesiones', 'programacion'];
@@ -188,6 +189,35 @@ export default function App() {
     }
   };
 
+  const handleResetTotal = async () => {
+    const advertencia =
+      '⚠️ Esto borra TODO de forma IRREVERSIBLE: mensajes, contactos, conversaciones, ' +
+      'memoria del bot y la sesión de WhatsApp (pedirá escanear un QR nuevo).\n\n' +
+      'La programación de las UVAs (agenda) NO se borra.\n\n' +
+      '¿Continuar?';
+    if (!window.confirm(advertencia)) return;
+
+    const confirmacion = window.prompt('Para confirmar, escriba BORRAR TODO (en mayúsculas):');
+    if (confirmacion !== 'BORRAR TODO') {
+      setError('Cancelado: el texto de confirmación no coincidió.');
+      return;
+    }
+
+    setReiniciando(true);
+    setError('');
+    try {
+      const reporte = await resetTotal(token);
+      console.log('[ResetTotal]', reporte);
+      setTimeout(async () => {
+        await loadData();
+        setReiniciando(false);
+      }, 3000);
+    } catch (err) {
+      setError(err.message);
+      setReiniciando(false);
+    }
+  };
+
   const saveProgram = async () => {
     try {
       await upsertProgramming(token, form);
@@ -273,6 +303,14 @@ export default function App() {
         <div className="actions">
           <button onClick={loadData}>Actualizar</button>
           <button className="danger" onClick={async () => { await resetAll(token); await loadData(); }}>Reset global</button>
+          <button
+            className="danger"
+            onClick={handleResetTotal}
+            disabled={reiniciando}
+            title="Borra mensajes, contactos, conversaciones, memoria y la sesión de WhatsApp. La programación de las UVAs NO se borra."
+          >
+            🔴 Borrar TODO y empezar de cero
+          </button>
           <button onClick={() => { localStorage.removeItem('admin_token'); setToken(''); }}>Salir</button>
         </div>
       </header>
