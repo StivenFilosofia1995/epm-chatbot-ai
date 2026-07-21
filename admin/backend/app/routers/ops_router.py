@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.request import Request, urlopen
 
@@ -86,6 +87,14 @@ _TABLAS_RESET_TOTAL = {
 }
 
 
+def _borrar_tabla(tabla: str, columna: str):
+    try:
+        res = supabase.table(tabla).delete().neq(columna, '__no_op__').execute()
+        return tabla, len(res.data or [])
+    except Exception as exc:
+        return tabla, f'error: {exc}'
+
+
 @router.post('/reset-total')
 def reset_total(_admin: Annotated[str, Depends(get_current_admin)]):
     """Borra TODO el historial (mensajes, contactos, conversaciones, memoria,
@@ -93,14 +102,15 @@ def reset_total(_admin: Annotated[str, Depends(get_current_admin)]):
     (pide QR nuevo). Acción IRREVERSIBLE — pensada para empezar de cero cuando
     el estado quedó inconsistente. El botón del panel debe confirmar dos veces
     antes de llamar esto.
+
+    Los borrados corren en paralelo (no uno tras otro): con 5 tablas y la
+    llamada al bot para reiniciar WhatsApp, hacerlo secuencial se acercaba
+    demasiado al timeout del proxy Node → FastAPI (antes 10s, ahora 30s) y
+    el usuario veía "panel no disponible" aunque todo funcionara bien.
     """
-    borrados = {}
-    for tabla, columna in _TABLAS_RESET_TOTAL.items():
-        try:
-            res = supabase.table(tabla).delete().neq(columna, '__no_op__').execute()
-            borrados[tabla] = len(res.data or [])
-        except Exception as exc:
-            borrados[tabla] = f'error: {exc}'
+    with ThreadPoolExecutor(max_workers=len(_TABLAS_RESET_TOTAL)) as pool:
+        resultados = pool.map(lambda kv: _borrar_tabla(*kv), _TABLAS_RESET_TOTAL.items())
+    borrados = dict(resultados)
 
     whatsapp = _post_bot('reiniciar')
 

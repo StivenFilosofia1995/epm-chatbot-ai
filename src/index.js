@@ -389,11 +389,15 @@ app.all('/api/*', async (req, res) => {
       if (k.toLowerCase() !== 'host') headers[k] = v;
     }
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+    // 30s: algunas operaciones admin son lentas de por sí (borrado masivo en
+    // reset-total, OCR de PDF, parseo de Excel). Con 10s, Node abortaba la
+    // petición y devolvía este mismo 503 genérico aunque FastAPI estuviera
+    // sano y simplemente aún trabajando — parecía "panel caído" sin estarlo.
     const fetchRes = await fetch(targetUrl, {
       method: req.method,
       headers,
       body: hasBody ? JSON.stringify(req.body) : undefined,
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(30_000),
     });
     res.status(fetchRes.status);
     fetchRes.headers.forEach((v, k) => {
@@ -402,8 +406,15 @@ app.all('/api/*', async (req, res) => {
     const text = await fetchRes.text();
     res.send(text);
   } catch (err) {
-    console.error(`[Proxy] Error: ${err.message}`);
-    if (!res.headersSent) res.status(503).json({ error: 'Panel admin no disponible.' });
+    const esTimeout = err.name === 'TimeoutError' || err.name === 'AbortError';
+    console.error(`[Proxy] Error ${esTimeout ? '(timeout tras 30s)' : ''}: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(503).json({
+        error: esTimeout
+          ? 'La operación tardó demasiado (>30s) en el panel admin. Puede seguir en curso — verifique antes de reintentar.'
+          : 'Panel admin no disponible.',
+      });
+    }
   }
 });
 
