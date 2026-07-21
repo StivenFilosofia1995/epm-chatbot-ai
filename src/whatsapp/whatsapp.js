@@ -245,10 +245,19 @@ export async function iniciarWhatsApp() {
     // status: 0 error | 1 pendiente | 2 servidor recibió | 3 entregado | 4 leído
     miSock.ev.on('messages.update', (actualizaciones) => {
       if (sock !== miSock) return;
-      for (const { key, update } of actualizaciones) {
-        if (update.status !== undefined || update.messageStubType) {
-          console.log(`[WA-STATUS] ${key.remoteJid} (fromMe=${key.fromMe}) → status=${update.status ?? '?'} stub=${update.messageStubType ?? ''} ${update.messageStubParameters ? JSON.stringify(update.messageStubParameters) : ''}`);
-        }
+      // Sin filtrar nada — un filtro anterior asumía la forma exacta del
+      // payload y podía estar ocultando datos reales si v7 cambió la forma.
+      for (const item of actualizaciones) {
+        console.log(`[WA-STATUS] ${JSON.stringify(item)}`);
+      }
+    });
+
+    // Confirmaciones de entrega/lectura de mensajes propios (distinto del
+    // estado general de arriba) — puede traer info que messages.update no trae.
+    miSock.ev.on('message-receipt.update', (recibos) => {
+      if (sock !== miSock) return;
+      for (const item of recibos) {
+        console.log(`[WA-RECEIPT] ${JSON.stringify(item)}`);
       }
     });
 
