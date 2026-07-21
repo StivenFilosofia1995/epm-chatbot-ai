@@ -21,6 +21,21 @@ import {
 
 const TABS = ['insights', 'logs', 'sesiones', 'programacion'];
 
+// Debe coincidir EXACTO con RECINTOS_EPM en src/agents/chat-agent.js — el bot
+// busca la agenda por nombre exacto de espacio.
+const ESPACIOS_EPM = [
+  'UVA de La Esperanza', 'UVA Nuevo Amanecer', 'UVA de La Cordialidad', 'UVA de La Alegría',
+  'UVA de La Armonía', 'UVA de Los Sueños', 'UVA Los Guayacanes', 'UVA El Encanto',
+  'UVA de La Imaginación', 'UVA de La Libertad', 'UVA Ilusión Verde',
+  'UVA Mirador de San Cristóbal', 'UVA Aguas Claras', 'UVA San Fernando',
+  'Biblioteca EPM', 'Museo del Agua', 'Parque de los Deseos',
+];
+
+const MESES_ES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('admin_token') || '');
   const [loading, setLoading] = useState(false);
@@ -43,6 +58,9 @@ export default function App() {
   const [importingPdf, setImportingPdf] = useState(false);
   const [importReport, setImportReport] = useState(null);
   const [excelFile, setExcelFile] = useState(null);
+  const [excelUva, setExcelUva] = useState(ESPACIOS_EPM[0]);
+  const [excelAnio, setExcelAnio] = useState(new Date().getFullYear());
+  const [excelMes, setExcelMes] = useState(new Date().getMonth() + 1);
   const [replaceMonthOnExcelImport, setReplaceMonthOnExcelImport] = useState(true);
   const [importingExcel, setImportingExcel] = useState(false);
   const [excelImportReport, setExcelImportReport] = useState(null);
@@ -219,7 +237,12 @@ export default function App() {
     setExcelImportReport(null);
     setImportingExcel(true);
     try {
-      const report = await ingestProgrammingExcel(token, excelFile, replaceMonthOnExcelImport);
+      const report = await ingestProgrammingExcel(token, excelFile, {
+        uvaNombre: excelUva,
+        anio: excelAnio,
+        mes: excelMes,
+        replaceMonth: replaceMonthOnExcelImport,
+      });
       setExcelImportReport(report);
       setExcelFile(null);
       await loadData();
@@ -482,9 +505,39 @@ export default function App() {
 
             <h3>Cargar programación desde Excel</h3>
             <p className="muted small">
-              Recomendado para actualizar el mes: no depende de scraping ni OCR.
-              Columnas esperadas en la primera fila: uva_nombre, fecha, hora_inicio, hora_fin, actividad, descripcion, edad_recomendada.
+              Recomendado para actualizar el mes: no depende de scraping ni OCR. Usa el formato
+              real de EPM (una hoja por segmento, columnas Título del curso, Descripción, Día(s),
+              Fecha(s), Horario, Lugar, Público, Inscripción, Enlace de inscripción). El archivo
+              completo corresponde a UN espacio — indíquelo abajo junto con el mes/año.
             </p>
+            <label htmlFor="programming-excel-uva">Espacio / UVA de este archivo</label>
+            <select
+              id="programming-excel-uva"
+              value={excelUva}
+              onChange={(e) => setExcelUva(e.target.value)}
+            >
+              {ESPACIOS_EPM.map((nombre) => (
+                <option key={nombre} value={nombre}>{nombre}</option>
+              ))}
+            </select>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <label style={{ flex: 1 }}>
+                <span>Mes</span>
+                <select value={excelMes} onChange={(e) => setExcelMes(Number(e.target.value))}>
+                  {MESES_ES.map((nombre, i) => (
+                    <option key={nombre} value={i + 1}>{nombre}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ flex: 1 }}>
+                <span>Año</span>
+                <input
+                  type="number"
+                  value={excelAnio}
+                  onChange={(e) => setExcelAnio(Number(e.target.value))}
+                />
+              </label>
+            </div>
             <label htmlFor="programming-excel-file">Archivo Excel (.xlsx)</label>
             <input
               id="programming-excel-file"
@@ -498,7 +551,7 @@ export default function App() {
                 checked={replaceMonthOnExcelImport}
                 onChange={(e) => setReplaceMonthOnExcelImport(e.target.checked)}
               />
-              <span>Reemplazar mes detectado antes de importar</span>
+              <span>Reemplazar programación existente de este espacio y mes antes de importar</span>
             </label>
             <button onClick={uploadExcelProgramming} disabled={importingExcel}>
               {importingExcel ? 'Procesando Excel...' : 'Importar Excel'}

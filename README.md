@@ -147,10 +147,17 @@ curl http://localhost:3000/health
 
 La forma recomendada es el **panel admin** (`/admin` → pestaña "Programación"):
 
-- **Subir Excel (.xlsx)** — vía preferida, no depende de scraping ni OCR. Columnas
-  esperadas en la primera fila (cualquier orden): `uva_nombre, fecha, hora_inicio,
-  hora_fin, actividad, descripcion, edad_recomendada`. Puede marcar "Reemplazar mes
-  detectado" para vaciar ese mes antes de insertar.
+- **Subir Excel (.xlsx)** — vía preferida, no depende de scraping ni OCR. Usa el
+  formato real que envía EPM cada mes (una hoja por segmento, ej. "Programación
+  infantil" / "Jóvenes y adultos"), con columnas en la primera fila (cualquier
+  orden): `Título del curso, Descripción, Día(s), Fecha(s), Horario, Lugar,
+  Público, Inscripción, Enlace de inscripción`. El archivo completo corresponde
+  a UN espacio (no trae esa columna), así que el panel pide indicar el espacio
+  y el mes/año al subirlo. Entiende fechas múltiples y recurrentes en una sola
+  celda (`"7, 14, 21 y 28 de julio"`, `"Todos los martes de julio"`) y horarios
+  en 12h (`"2:00 p.m. a 4:00 p.m."`, incluyendo `"12:00 m."` = mediodía). Puede
+  marcar "Reemplazar programación existente" para vaciar ese espacio+mes antes
+  de insertar.
 - **Subir PDF** — usa OCR/parser automático, útil si solo se tiene el volante oficial.
 - El panel muestra una advertencia si el mes actual no tiene programación cargada —
   esa es la causa más común de que el bot responda "no tengo programación" en vez de

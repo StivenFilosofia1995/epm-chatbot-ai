@@ -91,9 +91,12 @@ export async function ingestProgrammingPdf(token, file, replaceMonth = false, oc
   return data;
 }
 
-export async function ingestProgrammingExcel(token, file, replaceMonth = false) {
+export async function ingestProgrammingExcel(token, file, { uvaNombre, anio, mes, replaceMonth = false }) {
   const form = new FormData();
   form.append('file', file);
+  form.append('uva_nombre', uvaNombre);
+  form.append('anio', String(anio));
+  form.append('mes', String(mes));
   form.append('replace_month', String(replaceMonth));
 
   const res = await fetch(`${API_BASE}/programming/ingest-excel`, {

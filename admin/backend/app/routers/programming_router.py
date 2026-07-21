@@ -1,5 +1,8 @@
+import calendar
 import io
-from datetime import date, datetime, time as dt_time
+import re
+import unicodedata
+from datetime import date
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from typing import Annotated
 from ..deps import get_current_admin
@@ -10,32 +13,52 @@ from ..pdf_ingestion import extract_text_from_pdf_bytes, parse_programming_text
 
 router = APIRouter(prefix='/programming', tags=['programming'])
 
-# Encabezados aceptados en el Excel (case-insensitive, sin tildes) → columna real
-_EXCEL_COLUMNAS = {
-    'uva_nombre': ['uva_nombre', 'uva', 'nombre uva', 'espacio', 'recinto'],
-    'fecha': ['fecha', 'dia', 'date'],
-    'hora_inicio': ['hora_inicio', 'hora inicio', 'inicio', 'hora_de_inicio'],
-    'hora_fin': ['hora_fin', 'hora fin', 'fin', 'hora_de_fin'],
-    'actividad': ['actividad', 'nombre_actividad', 'titulo', 'evento'],
-    'descripcion': ['descripcion', 'detalle', 'observaciones'],
-    'edad_recomendada': ['edad_recomendada', 'edad', 'rango_edad', 'publico'],
+# Encabezados reales de los Excel que envía la Fundación EPM cada mes
+# (ver "Programación infantil" / "Jóvenes y adultos" — una hoja por segmento,
+# un archivo por espacio/UVA; el nombre del espacio NO viene como columna).
+_EPM_COLUMNAS = {
+    'titulo': ['titulo del curso', 'titulo', 'nombre del curso', 'curso', 'actividad'],
+    'descripcion': ['descripcion'],
+    'dias': ['dia(s)', 'dias', 'dia'],
+    'fechas': ['fecha(s)', 'fechas', 'fecha'],
+    'horario': ['horario', 'hora'],
+    'lugar': ['lugar', 'espacio', 'sala'],
+    'publico': ['publico', 'edad', 'rango de edad', 'edad_recomendada'],
+    'inscripcion': ['inscripcion'],
+    'enlace_inscripcion': ['enlace de inscripcion', 'enlace inscripcion', 'link de inscripcion', 'enlace'],
+}
+
+_MESES_ES = {
+    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4, 'mayo': 5, 'junio': 6,
+    'julio': 7, 'agosto': 8, 'septiembre': 9, 'octubre': 10, 'noviembre': 11, 'diciembre': 12,
+}
+
+# Índice de weekday() de Python: lunes=0 ... domingo=6
+_DIAS_SEMANA_ES = {
+    'lunes': 0, 'martes': 1, 'miercoles': 2, 'jueves': 3, 'viernes': 4, 'sabado': 5, 'domingo': 6,
 }
 
 
 def _sin_tildes(texto: str) -> str:
-    import unicodedata
-    texto = unicodedata.normalize('NFKD', texto)
+    texto = unicodedata.normalize('NFKD', str(texto))
     return ''.join(ch for ch in texto if not unicodedata.combining(ch))
 
 
-def _mapear_encabezados(fila_encabezado: list) -> dict[str, int]:
+def _texto(v) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _mapear_encabezados(fila_encabezado: list, columnas: dict) -> dict[str, int]:
     """Retorna {campo_interno: indice_columna} según los encabezados detectados."""
     normalizados = [
         _sin_tildes(str(c).strip().lower()) if c is not None else ''
         for c in fila_encabezado
     ]
     mapeo: dict[str, int] = {}
-    for campo, alias in _EXCEL_COLUMNAS.items():
+    for campo, alias in columnas.items():
         for idx, encabezado in enumerate(normalizados):
             if encabezado in alias:
                 mapeo[campo] = idx
@@ -43,49 +66,91 @@ def _mapear_encabezados(fila_encabezado: list) -> dict[str, int]:
     return mapeo
 
 
-def _valor_fecha(v) -> str | None:
-    if v is None or v == '':
-        return None
-    if isinstance(v, datetime):
-        return v.date().isoformat()
-    if isinstance(v, date):
-        return v.isoformat()
-    s = str(v).strip()
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%d/%m/%y'):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
+def _expandir_fechas(texto_fecha: str, anio: int, mes: int) -> list[str]:
+    """Convierte el texto libre de la columna 'Fecha(s)' en una lista de fechas ISO.
+
+    Cubre los patrones reales observados en los Excel de EPM:
+      - "01 de julio"                    → un solo día
+      - "7, 14, 21 y 28 de julio"        → varios días explícitos
+      - "23 y 30 de julio"               → idem, con solo dos
+      - "Todos los martes de julio"      → recurrencia semanal en todo el mes
+    El año y el mes SIEMPRE vienen del formulario de carga (el texto de la
+    celda nunca incluye el año, y a veces ni el mes).
+    """
+    norm = _sin_tildes(texto_fecha).lower()
+
+    dias_en_mes = calendar.monthrange(anio, mes)[1]
+    fechas: list[str] = []
+
+    m = re.search(r'todos\s+los\s+(lunes|martes|miercoles|jueves|viernes|sabado|domingo)', norm)
+    if m:
+        weekday_objetivo = _DIAS_SEMANA_ES[m.group(1)]
+        for dia in range(1, dias_en_mes + 1):
+            if date(anio, mes, dia).weekday() == weekday_objetivo:
+                fechas.append(date(anio, mes, dia).isoformat())
+        return fechas
+
+    for dia_str in re.findall(r'\b([0-3]?\d)\b', norm):
+        dia = int(dia_str)
+        if 1 <= dia <= dias_en_mes:
+            fechas.append(date(anio, mes, dia).isoformat())
+
+    # Dedup preservando orden (por si el número del día se repite en el texto)
+    vistas = set()
+    unicas = []
+    for f in fechas:
+        if f not in vistas:
+            vistas.add(f)
+            unicas.append(f)
+    return unicas
 
 
-def _valor_hora(v) -> str | None:
-    if v is None or v == '':
-        return None
-    if isinstance(v, dt_time):
-        return v.strftime('%H:%M')
-    if isinstance(v, datetime):
-        return v.strftime('%H:%M')
-    s = str(v).strip()
-    s = s.replace('.', ':').replace('h', ':').rstrip(':')
-    for fmt in ('%H:%M', '%H:%M:%S'):
-        try:
-            return datetime.strptime(s, fmt).strftime('%H:%M')
-        except ValueError:
-            continue
-    return s or None
+def _parsear_horario(texto_horario: str) -> tuple[str | None, str | None]:
+    """Convierte "2:00 p.m. a 4:00 p.m." / "10:00 a.m. a 12:00 m." (mediodía) a 24h."""
+    norm = texto_horario.lower()
+
+    patron = re.compile(
+        r'(\d{1,2}):(\d{2})\s*([ap]\.?\s*m\.?|m\.?)\s*a\s*(\d{1,2}):(\d{2})\s*([ap]\.?\s*m\.?|m\.?)',
+        re.IGNORECASE,
+    )
+    match = patron.search(norm)
+    if not match:
+        return None, None
+
+    h1, m1, mer1, h2, m2, mer2 = match.groups()
+    return _hora_24(h1, m1, mer1), _hora_24(h2, m2, mer2)
 
 
-def parse_programming_excel(file_bytes: bytes) -> tuple[list[dict], dict]:
-    """Parsea un .xlsx de programación mensual a la misma forma que usa Supabase.
+def _hora_24(h: str, m: str, meridiano: str) -> str:
+    hora = int(h)
+    mer = re.sub(r'[.\s]', '', meridiano.lower())
+    if mer == 'm':
+        # "12:00 m." = mediodía (meridiano), no confundir con p.m.
+        hora = 12
+    elif mer == 'am':
+        hora = 0 if hora == 12 else hora
+    elif mer == 'pm':
+        hora = hora if hora == 12 else hora + 12
+    return f'{hora:02d}:{int(m):02d}'
 
-    Espera una fila de encabezado con columnas reconocibles (ver _EXCEL_COLUMNAS)
-    en cualquier orden. Las columnas 'uva_nombre', 'fecha' y 'actividad' son
-    obligatorias por fila; el resto es opcional.
+
+def parse_programming_excel(file_bytes: bytes, uva_nombre: str, anio: int, mes: int) -> tuple[list[dict], dict]:
+    """Parsea el Excel mensual real de EPM (columnas: Título del curso, Descripción,
+    Día(s), Fecha(s), Horario, Lugar, Público, Inscripción, Enlace de inscripción).
+
+    El archivo completo corresponde a UN espacio/UVA (no hay columna para eso),
+    por lo que `uva_nombre` se recibe aparte y se aplica a todas las filas de
+    todas las hojas (ej. "Programación infantil" + "Jóvenes y adultos").
+
+    Cada fila puede expandirse a VARIAS filas en la base de datos si su columna
+    'Fecha(s)' contiene más de una fecha o un patrón recurrente ("Todos los martes").
     """
     from openpyxl import load_workbook
 
-    debug = {'hojas_leidas': 0, 'filas_totales': 0, 'filas_descartadas': 0, 'columnas_detectadas': {}}
+    debug = {
+        'hojas_leidas': 0, 'filas_totales': 0, 'filas_descartadas': 0,
+        'fechas_generadas': 0, 'columnas_detectadas': {},
+    }
     items: list[dict] = []
 
     wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
@@ -97,9 +162,9 @@ def parse_programming_excel(file_bytes: bytes) -> tuple[list[dict], dict]:
         except StopIteration:
             continue
 
-        mapeo = _mapear_encabezados(list(encabezado))
-        if 'uva_nombre' not in mapeo or 'fecha' not in mapeo or 'actividad' not in mapeo:
-            continue  # hoja sin las columnas mínimas — se ignora (p.ej. una hoja de notas)
+        mapeo = _mapear_encabezados(list(encabezado), _EPM_COLUMNAS)
+        if 'titulo' not in mapeo or 'fechas' not in mapeo:
+            continue  # hoja sin las columnas mínimas — se ignora (ej. una hoja de notas)
 
         debug['hojas_leidas'] += 1
         debug['columnas_detectadas'][hoja.title] = list(mapeo.keys())
@@ -113,23 +178,49 @@ def parse_programming_excel(file_bytes: bytes) -> tuple[list[dict], dict]:
                 continue
             debug['filas_totales'] += 1
 
-            uva_nombre = _get(fila, 'uva_nombre')
-            fecha = _valor_fecha(_get(fila, 'fecha'))
-            actividad = _get(fila, 'actividad')
+            titulo = _texto(_get(fila, 'titulo'))
+            texto_fecha = _texto(_get(fila, 'fechas'))
 
-            if not uva_nombre or not fecha or not actividad:
+            if not titulo or not texto_fecha:
                 debug['filas_descartadas'] += 1
                 continue
 
-            items.append({
-                'uva_nombre': str(uva_nombre).strip(),
-                'fecha': fecha,
-                'hora_inicio': _valor_hora(_get(fila, 'hora_inicio')),
-                'hora_fin': _valor_hora(_get(fila, 'hora_fin')),
-                'actividad': str(actividad).strip()[:240],
-                'descripcion': (str(_get(fila, 'descripcion')).strip() or None) if _get(fila, 'descripcion') else None,
-                'edad_recomendada': (str(_get(fila, 'edad_recomendada')).strip() or None) if _get(fila, 'edad_recomendada') else None,
-            })
+            fechas = _expandir_fechas(texto_fecha, anio, mes)
+            if not fechas:
+                debug['filas_descartadas'] += 1
+                continue
+
+            texto_horario = _texto(_get(fila, 'horario'))
+            hora_inicio, hora_fin = _parsear_horario(texto_horario) if texto_horario else (None, None)
+
+            partes_desc = []
+            descripcion = _texto(_get(fila, 'descripcion'))
+            if descripcion:
+                partes_desc.append(descripcion)
+            lugar = _texto(_get(fila, 'lugar'))
+            if lugar:
+                partes_desc.append(f'Lugar: {lugar}')
+            inscripcion = _texto(_get(fila, 'inscripcion'))
+            if inscripcion and 'no requiere' not in _sin_tildes(inscripcion).lower():
+                partes_desc.append(f'Inscripción: {inscripcion}')
+            enlace = _texto(_get(fila, 'enlace_inscripcion'))
+            if enlace:
+                partes_desc.append(f'Enlace de inscripción: {enlace}')
+            descripcion_final = ' | '.join(partes_desc)[:500] or None
+
+            edad_recomendada = _texto(_get(fila, 'publico'))
+
+            for fecha_iso in fechas:
+                items.append({
+                    'uva_nombre': uva_nombre,
+                    'fecha': fecha_iso,
+                    'hora_inicio': hora_inicio,
+                    'hora_fin': hora_fin,
+                    'actividad': titulo[:240],
+                    'descripcion': descripcion_final,
+                    'edad_recomendada': edad_recomendada,
+                })
+                debug['fechas_generadas'] += 1
 
     return items, debug
 
@@ -258,12 +349,20 @@ async def ingest_pdf_programming(
 async def ingest_excel_programming(
     _admin: Annotated[str, Depends(get_current_admin)],
     file: UploadFile = File(...),
+    uva_nombre: str = Form(...),
+    anio: int = Form(...),
+    mes: int = Form(..., ge=1, le=12),
     replace_month: bool = Form(False),
 ):
-    """Carga la programación mensual desde un Excel (.xlsx).
+    """Carga la programación mensual desde el Excel real que envía EPM (.xlsx).
 
-    Columnas esperadas (en cualquier orden, con encabezado en la primera fila):
-    uva_nombre, fecha, hora_inicio, hora_fin, actividad, descripcion, edad_recomendada.
+    El archivo corresponde a UN espacio/UVA completo (Biblioteca EPM, una UVA, etc.),
+    con hojas como "Programación infantil" / "Jóvenes y adultos". Columnas esperadas
+    en cada hoja (encabezado en la primera fila, cualquier orden): Título del curso,
+    Descripción, Día(s), Fecha(s), Horario, Lugar, Público, Inscripción,
+    Enlace de inscripción. El nombre del espacio y el mes/año se indican aparte
+    porque el archivo no los trae como columna.
+
     Es la vía recomendada para actualizar el mes: no depende de scraping ni OCR.
     """
     if not file.filename.lower().endswith(('.xlsx', '.xlsm')):
@@ -274,7 +373,7 @@ async def ingest_excel_programming(
         raise HTTPException(status_code=400, detail='El archivo esta vacio')
 
     try:
-        items, parse_debug = parse_programming_excel(excel_bytes)
+        items, parse_debug = parse_programming_excel(excel_bytes, uva_nombre.strip(), anio, mes)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f'No se pudo leer el Excel: {exc}')
 
@@ -282,19 +381,28 @@ async def ingest_excel_programming(
         raise HTTPException(
             status_code=422,
             detail='No se detectaron filas válidas. Verifique que la primera fila tenga los '
-                   'encabezados uva_nombre, fecha, hora_inicio, hora_fin y actividad.',
+                   'encabezados Título del curso, Fecha(s), Horario, etc.',
         )
 
     if replace_month:
-        fechas_validas = sorted(i['fecha'] for i in items if i.get('fecha'))
-        if fechas_validas:
-            _replace_month_if_requested(fechas_validas[0])
+        # Acotado a este espacio: cada Excel cubre UN solo espacio/UVA, así que
+        # reemplazar el mes NO debe borrar la programación de los demás espacios
+        # (a diferencia de /replace-month y el PDF, que cubren todos a la vez).
+        first_day = f'{anio:04d}-{mes:02d}-01'
+        next_month = f'{anio + (1 if mes == 12 else 0):04d}-{(1 if mes == 12 else mes + 1):02d}-01'
+        supabase.table('programacion_uva') \
+            .delete() \
+            .eq('uva_nombre', uva_nombre.strip()) \
+            .gte('fecha', first_day) \
+            .lt('fecha', next_month) \
+            .execute()
 
     supabase.table('programacion_uva').insert(items).execute()
 
     return {
         'ok': True,
         'archivo': file.filename,
+        'uva_nombre': uva_nombre,
         'insertados': len(items),
         'parse_debug': parse_debug,
     }

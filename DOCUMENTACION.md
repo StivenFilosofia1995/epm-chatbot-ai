@@ -247,9 +247,18 @@ La sesión de WhatsApp se guarda en **Supabase** (no en archivos del servidor). 
 ## 🔄 Actualizaciones de programación
 
 **Vía recomendada — Panel admin (`/admin` → pestaña "Programación"):**
-1. Exportar/preparar un Excel (.xlsx) con columnas `uva_nombre, fecha, hora_inicio, hora_fin, actividad, descripcion, edad_recomendada` (encabezado en la primera fila, cualquier orden)
-2. Subirlo en "Cargar programación desde Excel", opcionalmente marcando "Reemplazar mes detectado" para vaciar ese mes antes de insertar
-3. El bot refleja los cambios inmediatamente (sin necesidad de redesplegar)
+1. Tomar el Excel (.xlsx) mensual tal como lo envía EPM — una hoja por segmento
+   (ej. "Programación infantil" / "Jóvenes y adultos"), con columnas `Título del
+   curso, Descripción, Día(s), Fecha(s), Horario, Lugar, Público, Inscripción,
+   Enlace de inscripción`. No requiere editarlo ni agregar columnas.
+2. Subirlo en "Cargar programación desde Excel", indicando el espacio/UVA al
+   que corresponde el archivo completo y el mes/año (el archivo no trae esa
+   columna). Opcionalmente marcar "Reemplazar programación existente" para
+   vaciar ese espacio+mes antes de insertar.
+3. El parser entiende fechas múltiples/recurrentes en una celda (`"7, 14, 21 y
+   28 de julio"`, `"Todos los martes de julio"`) y horarios en 12h (incluyendo
+   `"12:00 m."` = mediodía), expandiendo cada fila a una fila por fecha real.
+4. El bot refleja los cambios inmediatamente (sin necesidad de redesplegar)
 
 También existe una vía para PDF (con OCR) en el mismo panel, útil si solo se cuenta con el volante oficial en PDF.
 
